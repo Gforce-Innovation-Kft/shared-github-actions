@@ -1,0 +1,27 @@
+name: Simple Test Workflow (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      message:
+        description: 'Message to display'
+        required: false
+        default: 'Hello from shared workflow!'
+        type: string
+    outputs:
+      result:
+        description: 'Result message'
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.echo.outputs.message }}
+    steps:
+      - name: Echo message
+        id: echo
+        run: |
+          echo "Message: ${{ inputs.message }}"
+          echo "result=${{ inputs.message }}" >> $GITHUB_OUTPUT
+          echo "✅ Shared workflow executed successfully!"
