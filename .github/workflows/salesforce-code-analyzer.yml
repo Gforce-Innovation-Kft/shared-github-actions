@@ -2,6 +2,10 @@ name: Salesforce Code Analyzer (Reusable)
 
 on:
   workflow_call:
+    secrets:
+      github-token:
+        description: 'GitHub token for PR comments and access'
+        required: true
     inputs:
       workspace:
         description: 'Workspace path to analyze'
@@ -93,6 +97,18 @@ jobs:
       - name: Check out files
         uses: actions/checkout@v5
 
+      - name: Verify workspace
+        run: |
+          echo "Current directory: $PWD"
+          echo "Workspace input: ${{ inputs.workspace }}"
+          ls -la
+          if [ -f "sfdx-project.json" ]; then
+            echo "✅ Found sfdx-project.json"
+            cat sfdx-project.json
+          else
+            echo "⚠️ No sfdx-project.json found"
+          fi
+
       # PREREQUISITES
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -122,7 +138,7 @@ jobs:
         with:
           run-arguments: --workspace ${{ inputs.workspace }} --view ${{ inputs.view }} --output-file ${{ inputs.output-file-html }} --output-file ${{ inputs.output-file-json }}
           results-artifact-name: ${{ inputs.results-artifact-name }}
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.github-token }}
 
       # Quality gate on ALL files in the repository
       - name: Check Violations (All Files)
