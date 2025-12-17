@@ -1,0 +1,32 @@
+name: "Get AWS Secret"
+description: "Fetches a secret from AWS Secrets Manager and returns its value"
+author: "GForce Innovation"
+
+inputs:
+  aws-region:
+    description: "AWS region where the secret is stored"
+    required: true
+    default: "eu-central-1"
+  secret-name:
+    description: "Name of the secret in AWS Secrets Manager"
+    required: true
+  aws-role-arn:
+    description: "ARN of the AWS IAM role to assume (for OIDC authentication)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: GitHubActions-${{ github.run_id }}
+
+    - name: Retrieve Secret from AWS Secrets Manager
+      uses: aws-actions/aws-secretsmanager-get-secrets@v2
+      with:
+        secret-ids: |
+          ,${{ inputs.secret-name }}
+        parse-json-secrets: true
