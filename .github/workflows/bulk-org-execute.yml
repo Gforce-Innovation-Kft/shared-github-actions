@@ -1,0 +1,153 @@
+name: Bulk Org Execute
+
+on:
+  workflow_call:
+    inputs:
+      org_auth_urls_json:
+        description: 'JSON array: [{"alias":"org-001","url":"force://..."},...]'
+        required: true
+        type: string
+      customers:
+        description: 'Comma-separated customer names to target. Leave empty to run all.'
+        required: false
+        type: string
+        default: ''
+      script_path:
+        description: 'Per-org script relative to repo root'
+        required: false
+        type: string
+        default: 'scripts/run-org.sh'
+      concurrency:
+        description: 'Max orgs running simultaneously (1 container each)'
+        required: false
+        type: number
+        default: 10
+      fail_fast:
+        description: 'Stop all orgs if one fails'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Filters the org list down to requested customers (or keeps all).
+  # Outputs the matrix JSON consumed by the execute job.
+  # ─────────────────────────────────────────────────────────────────────────
+  prepare:
+    name: Prepare org list
+    runs-on: pi5-runners-custom-sf   # needs Node.js for JSON filtering
+    outputs:
+      org_list: ${{ steps.filter.outputs.org_list }}
+      count:    ${{ steps.filter.outputs.count }}
+    steps:
+      - name: Filter to requested customers
+        id: filter
+        run: |
+          node -e "
+            const all       = JSON.parse(process.env.ORG_LIST);
+            const requested = (process.env.CUSTOMERS || '').trim();
+            let orgs        = all;
+
+            if (requested) {
+              const names = requested.split(',').map(s => s.trim().toLowerCase());
+              orgs = all.filter(o => names.includes(o.alias.toLowerCase()));
+              if (orgs.length === 0) {
+                console.error('ERROR: No matching customers for: ' + requested);
+                console.error('Available: ' + all.map(o => o.alias).join(', '));
+                process.exit(1);
+              }
+              console.log('Filtered to ' + orgs.length + ' of ' + all.length + ' orgs');
+            } else {
+              console.log('Running ALL ' + all.length + ' orgs');
+            }
+
+            if (orgs.length > 256) {
+              console.error('ERROR: ' + orgs.length + ' orgs exceeds GitHub matrix cap of 256.');
+              console.error('Use the customers input to split into smaller batches.');
+              process.exit(1);
+            }
+
+            const fs = require('fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,
+              'org_list=' + JSON.stringify(orgs) + '\n' +
+              'count='    + orgs.length          + '\n'
+            );
+          "
+        env:
+          ORG_LIST:  ${{ inputs.org_auth_urls_json }}
+          CUSTOMERS: ${{ inputs.customers }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # One matrix job per org. Each job:
+  #   1. Creates an sf-bulk container (not started yet)
+  #   2. Copies the checked-out repo into it (writable, isolated)
+  #   3. Pipes the auth URL to stdin → sf org login + runs the per-org script
+  #   4. Uploads the full log as an artifact
+  # ─────────────────────────────────────────────────────────────────────────
+  execute:
+    name: ${{ matrix.alias }}        # org name shown as job name in GitHub UI
+    needs: prepare
+    runs-on: pi5-runners-dind
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.org_list) }}
+      max-parallel: ${{ inputs.concurrency }}
+      fail-fast:    ${{ inputs.fail_fast }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Pull sf-bulk image
+        # Allow failure — image is expected to be cached on Pi; pull updates if available
+        run: docker pull sf-bulk:latest || true
+
+      - name: Mask auth URL
+        # Register the URL as a secret so it never appears in plain text in logs
+        run: echo "::add-mask::${{ matrix.url }}"
+
+      - name: Run ${{ matrix.alias }}
+        run: |
+          mkdir -p logs
+
+          # Create container without starting it so we can docker cp files in first.
+          # The bash -c command uses single quotes: $ORG_ALIAS and $SCRIPT_PATH are
+          # resolved from the container's own environment (-e flags), not the host shell.
+          CID=$(docker create -i \
+            -e ORG_ALIAS="${{ matrix.alias }}" \
+            -e SCRIPT_PATH="${{ inputs.script_path }}" \
+            gforceinnovation/sf-bulk:latest \
+            bash -c '
+              set -euo pipefail
+              sf org login sfdx-url --sfdx-url-stdin \
+                --alias "$ORG_ALIAS" \
+                --no-prompt
+              bash "/workspace/$SCRIPT_PATH" "$ORG_ALIAS"
+            ')
+
+          # Copy the checked-out repo into the container.
+          # Each container gets its own writable copy — scripts can create/modify files freely.
+          docker cp "$GITHUB_WORKSPACE/." "$CID:/workspace/"
+
+          # Start the container and pipe the auth URL to its stdin.
+          # Capture all output (stdout + stderr) to the log file.
+          echo "$ORG_URL" | docker start -ai "$CID" \
+            > "logs/${{ matrix.alias }}.log" 2>&1
+          EXIT=$?
+
+          # Explicit cleanup — docker create does not support --rm
+          docker rm -f "$CID" 2>/dev/null || true
+
+          exit $EXIT
+        env:
+          ORG_URL: ${{ matrix.url }}   # value is masked in logs after the mask step above
+
+      - name: Upload log
+        if: always()   # upload even when the org script fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ matrix.alias }}
+          path: logs/${{ matrix.alias }}.log
+          if-no-files-found: warn
