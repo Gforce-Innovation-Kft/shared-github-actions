@@ -1,0 +1,70 @@
+name: Bulk Org Demo (gaborOrg)
+
+# Demo / smoke test for the bulk-org-execute workflow.
+# Uses a single real org (gaborOrg) N times to simulate multiple customers:
+#   - Each container authenticates independently with the same auth URL
+#   - Sleeps 2 seconds, queries Lead count, inserts a test Lead
+#
+# Setup: add GABOR_ORG_AUTH_URL as a GitHub Actions secret.
+# Value: the sfdxAuthUrl from "sf org display --target-org gaborOrg --verbose"
+#   force://PlatformCLI::<refresh-token>@<instance-url>
+#
+# Run manually from: Actions → Bulk Org Demo → Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      org_count:
+        description: 'Number of simulated orgs (containers) to run'
+        type: string
+        required: false
+        default: '5'
+      concurrency:
+        description: 'Max orgs running simultaneously'
+        type: string
+        required: false
+        default: '5'
+
+permissions:
+  contents: read
+
+jobs:
+  build-org-list:
+    name: Build org list
+    runs-on: pi5-runners-custom-sf   # needs Node.js to build the JSON array
+    outputs:
+      org_list: ${{ steps.build.outputs.org_list }}
+    steps:
+      - name: Build org list from secret
+        id: build
+        run: |
+          # Mask immediately — the secret contains a refresh token
+          echo "::add-mask::$AUTH_URL"
+
+          # Build JSON array: N orgs all pointing to the same auth URL.
+          # AUTH_URL is passed via env var so it never appears in the script source.
+          node -e "
+            const url  = process.env.AUTH_URL;
+            const n    = parseInt(process.env.ORG_COUNT);
+            const orgs = Array.from({ length: n }, (_, i) => ({
+              alias: 'test-org-' + String(i + 1).padStart(2, '0'),
+              url,
+            }));
+            require('fs').appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              'org_list=' + JSON.stringify(orgs) + '\n'
+            );
+            console.log('Built ' + n + ' test orgs pointing to gaborOrg');
+          "
+        env:
+          AUTH_URL:  ${{ secrets.GABOR_ORG_AUTH_URL }}
+          ORG_COUNT: ${{ inputs.org_count }}
+
+  run-bulk:
+    needs: build-org-list
+    uses: gforceinnovation/shared-github-actions/.github/workflows/bulk-org-execute.yml@main
+    with:
+      org_auth_urls_json: ${{ needs.build-org-list.outputs.org_list }}
+      script_path:        'scripts/run-org.sh'
+      concurrency:        ${{ fromJson(inputs.concurrency) }}
+      fail_fast:          false
