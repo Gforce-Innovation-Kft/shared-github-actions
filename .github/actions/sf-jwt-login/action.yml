@@ -35,7 +35,7 @@ runs:
   using: "composite"
   steps:
     - name: Get Salesforce credentials from AWS Secrets Manager
-      uses: gforceinnovation/shared-github-actions/.github/actions/get-aws-secret@main
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/get-aws-secret@main
       with:
         aws-region: ${{ inputs.aws-region }}
         secret-name: ${{ inputs.secret-name }}
