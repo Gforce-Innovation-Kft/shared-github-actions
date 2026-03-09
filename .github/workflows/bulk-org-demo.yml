@@ -62,7 +62,7 @@ jobs:
 
   run-bulk:
     needs: build-org-list
-    uses: gforceinnovation/shared-github-actions/.github/workflows/bulk-org-execute.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/bulk-org-execute.yml@main
     with:
       org_auth_urls_json: ${{ needs.build-org-list.outputs.org_list }}
       script_path:        'scripts/run-org.sh'
