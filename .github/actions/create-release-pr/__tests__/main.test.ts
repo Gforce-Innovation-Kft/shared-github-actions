@@ -1,6 +1,6 @@
 import { runGitHubAction } from '@gforce/github-actions-runtime';
 import { runCreateReleasePrAction, validateCreateReleasePrInputs } from '@gforce/core';
-import { run, createReleasePrAction } from '../src/main';
+import { run, createReleasePrAction } from '../src/index';
 import { readInputs } from '../src/inputReader';
 import { writeOutputs } from '../src/outputWriter';
 

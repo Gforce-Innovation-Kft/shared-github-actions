@@ -15,8 +15,10 @@ collaborators and hands them to `runGitHubAction`. See
      `ActionContext` onto the use case.
    - `validate<Name>Inputs.ts` — `Raw*Inputs -> Validated*Inputs` (reuses the
      shared validation helpers).
-   Reuse existing `GitHubService` methods; only add a new method to the port +
-   `OctokitGitHubService` if no wrapper exists yet. Export everything from
+   Reuse existing `GitHubService` (facade) methods; only add a new method to the
+   relevant per-domain port + its `Octokit*Service` (and the facade) if no
+   wrapper exists yet — or a new `*Service` domain module if it's a new area.
+   Export everything from
    `packages/core/src/index.ts`. Add core unit tests.
 
 2. **Scaffold the action** under `.github/actions/<name>/`:
@@ -26,11 +28,11 @@ collaborators and hands them to `runGitHubAction`. See
    - `action.yml` — `using: node20`, `main: dist/index.js`, kebab-case inputs/outputs.
    - `tsconfig.json` — `extends ../../../tsconfig.base.json`, `noEmit`.
    - `jest.config.js` — copy an existing action (maps `@gforce/core` **and**
-     `@gforce/github-actions-runtime` to source, per-package 90% threshold,
-     excludes `index.ts`).
-   - `src/` — the four template files (`index`, `main`, `inputReader`,
-     `outputWriter`). `main.ts` builds the `GitHubActionDefinition` and exposes
-     `run(overrides?)` which calls `runGitHubAction`.
+     `@gforce/github-actions-runtime` to source, per-package 90% threshold).
+   - `src/` — three template files (`index`, `inputReader`, `outputWriter`).
+     `index.ts` builds the `GitHubActionDefinition`, exposes `run(overrides?)`
+     (which calls `runGitHubAction`), and self-invokes under a
+     `require.main === module` guard so importing it in tests doesn't run it.
 
 3. **Register the workspace.** Add `.github/actions/<name>` to the root
    `package.json` `workspaces` array (it is an explicit list — composite actions
@@ -51,13 +53,15 @@ collaborators and hands them to `runGitHubAction`. See
 
 ## Rules (also for AI agents)
 
-- **No business logic in the entrypoint.** `index.ts` is `void run()` only; logic
-  lives in core, the run loop in the runtime package, wiring in `main.ts`.
+- **No business logic in the entrypoint.** `index.ts` only wires the
+  `GitHubActionDefinition` and delegates the loop to `runGitHubAction`; the logic
+  lives in core and the run loop in the runtime package.
 - **Never import `@actions/core` (or any runner API) in `packages/core`.** Anything
   `@actions/*`-bound belongs in `@gforce/github-actions-runtime`. Pure helpers
   (e.g. `parseRepoRef`) stay in core; only the env read lives in the runtime.
-- **One wrapper per GitHub API call**, in `OctokitGitHubService` only. Reuse it;
-  don't call Octokit from a use case or adapter.
+- **One wrapper per GitHub API call**, in the relevant `Octokit*Service` only
+  (`@octokit/rest` is touched nowhere else). Reuse it; don't call Octokit from a
+  use case or adapter.
 - **Build the service via `OctokitGitHubService.getInstance(token)`** (the runtime
   does this for you) — don't `new Octokit()` in an adapter. Use
   `newInstance`/`resetInstance` only for test isolation.

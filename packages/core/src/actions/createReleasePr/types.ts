@@ -1,5 +1,5 @@
 /** Types for the portable create-release-pr use case. */
-import type { GitHubService } from '../../github-service/githubService';
+import type { GitHubService } from '../../github-service/github/gitHubService';
 import type { RepoRef } from '../../github-service/types';
 import type { Logger } from '../../utils/logging/logger';
 

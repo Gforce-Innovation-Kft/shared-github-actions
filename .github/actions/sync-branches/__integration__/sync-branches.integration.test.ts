@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import type { CompareResult, GitHubService, PullRequestSummary } from '@gforce/core';
-import { run } from '../src/main';
+import { run } from '../src/index';
 
 jest.mock('@actions/core');
 

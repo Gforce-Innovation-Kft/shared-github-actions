@@ -33511,6 +33511,37 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 1719:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.syncBranchesAction = void 0;
+exports.run = run;
+const core_1 = __nccwpck_require__(9745);
+const github_actions_runtime_1 = __nccwpck_require__(3946);
+const inputReader_1 = __nccwpck_require__(4264);
+const outputWriter_1 = __nccwpck_require__(8629);
+/** The sync-branches action wired from portable, shared pieces. */
+exports.syncBranchesAction = {
+    readInputs: inputReader_1.readInputs,
+    validateInputs: core_1.validateSyncBranchesInputs,
+    execute: core_1.runSyncBranchesAction,
+    writeOutputs: outputWriter_1.writeOutputs,
+};
+/** Action entrypoint. `overrides` is for tests; production passes nothing. */
+function run(overrides) {
+    return (0, github_actions_runtime_1.runGitHubAction)(exports.syncBranchesAction, overrides);
+}
+/* istanbul ignore next -- runner-only entry guard; tests import and call run() directly */
+if (require.main === require.cache[eval('__filename')]) {
+    void run();
+}
+
+
+/***/ }),
+
 /***/ 4264:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -33561,33 +33592,6 @@ function readInputs() {
         dryRun: core.getInput('dry-run'),
         githubToken: core.getInput('github-token'),
     };
-}
-
-
-/***/ }),
-
-/***/ 666:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.syncBranchesAction = void 0;
-exports.run = run;
-const core_1 = __nccwpck_require__(9745);
-const github_actions_runtime_1 = __nccwpck_require__(3946);
-const inputReader_1 = __nccwpck_require__(4264);
-const outputWriter_1 = __nccwpck_require__(8629);
-/** The sync-branches action wired from portable, shared pieces. */
-exports.syncBranchesAction = {
-    readInputs: inputReader_1.readInputs,
-    validateInputs: core_1.validateSyncBranchesInputs,
-    execute: core_1.runSyncBranchesAction,
-    writeOutputs: outputWriter_1.writeOutputs,
-};
-/** Action entrypoint. `overrides` is for tests; production passes nothing. */
-function run(overrides) {
-    return (0, github_actions_runtime_1.runGitHubAction)(exports.syncBranchesAction, overrides);
 }
 
 
@@ -34001,86 +34005,47 @@ function validateSyncBranchesInputs(raw) {
 
 /***/ }),
 
-/***/ 7102:
+/***/ 8846:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.OctokitGitHubService = void 0;
-/**
- * The single concrete {@link GitHubService}. This is the ONLY module in the
- * codebase that talks to `@octokit/rest`; every other layer depends on the
- * interface.
- *
- * It also owns the singleton lifecycle for the service via static
- * {@link OctokitGitHubService.getInstance} / {@link OctokitGitHubService.newInstance}
- * / {@link OctokitGitHubService.resetInstance}, so a single authenticated client
- * — and its shared rate-limit budget — backs every API call across the use
- * cases. The constructor stays injectable so tests can pass a fake `Octokit`.
- */
-const rest_1 = __nccwpck_require__(6946);
+exports.OctokitBranchService = void 0;
 const errors_1 = __nccwpck_require__(272);
-function toPullRequestSummary(pr) {
-    return {
-        number: pr.number,
-        htmlUrl: pr.html_url,
-        title: pr.title,
-        state: pr.state,
-        draft: pr.draft ?? false,
-        headRef: pr.head.ref,
-        baseRef: pr.base.ref,
-    };
-}
-function toGitHubApiError(error, operation) {
-    const status = error.status;
-    const message = error instanceof Error ? error.message : String(error);
-    return new errors_1.GitHubApiError(`Failed to ${operation}: ${message}`, status);
-}
-class OctokitGitHubService {
+const gitHubClient_1 = __nccwpck_require__(6563);
+const octokitSupport_1 = __nccwpck_require__(9459);
+class OctokitBranchService {
     octokit;
     static shared;
     static sharedToken;
     constructor(octokit) {
         this.octokit = octokit;
     }
-    /**
-     * Return the process-wide shared instance, building it on first use. A later
-     * call with a different token throws to avoid silently issuing API calls under
-     * the wrong identity — call {@link OctokitGitHubService.resetInstance} first,
-     * or {@link OctokitGitHubService.newInstance} for an isolated client.
-     */
+    /** Shared instance over the shared {@link GitHubClient}; throws on token mismatch. */
     static getInstance(token) {
-        if (OctokitGitHubService.shared) {
-            if (OctokitGitHubService.sharedToken !== token) {
-                throw new errors_1.ValidationError('A shared GitHub service already exists for a different token. ' +
-                    'Call OctokitGitHubService.resetInstance() first, or use OctokitGitHubService.newInstance() for an isolated client.');
+        if (OctokitBranchService.shared) {
+            if (OctokitBranchService.sharedToken !== token) {
+                throw new errors_1.ValidationError('A shared branch service already exists for a different token. ' +
+                    'Call OctokitBranchService.resetInstance() first, or use OctokitBranchService.newInstance() for an isolated client.');
             }
-            return OctokitGitHubService.shared;
+            return OctokitBranchService.shared;
         }
-        OctokitGitHubService.sharedToken = token;
-        OctokitGitHubService.shared = OctokitGitHubService.newInstance(token);
-        return OctokitGitHubService.shared;
+        OctokitBranchService.sharedToken = token;
+        OctokitBranchService.shared = new OctokitBranchService(gitHubClient_1.GitHubClient.getInstance(token).octokit);
+        return OctokitBranchService.shared;
     }
-    /** Build a brand-new, isolated service. Never cached. */
+    /** Build an isolated service over a fresh client. Never cached. */
     static newInstance(token) {
-        return new OctokitGitHubService(new rest_1.Octokit({ auth: token }));
+        return new OctokitBranchService(gitHubClient_1.GitHubClient.newInstance(token).octokit);
     }
     /** Drop the cached shared instance so the next get rebuilds it. Test-only. */
     static resetInstance() {
-        OctokitGitHubService.shared = undefined;
-        OctokitGitHubService.sharedToken = undefined;
-    }
-    async run(operation, fn) {
-        try {
-            return await fn();
-        }
-        catch (error) {
-            throw toGitHubApiError(error, operation);
-        }
+        OctokitBranchService.shared = undefined;
+        OctokitBranchService.sharedToken = undefined;
     }
     compareBranches(repo, base, head) {
-        return this.run('compare branches', async () => {
+        return (0, octokitSupport_1.runOctokit)('compare branches', async () => {
             const { data } = await this.octokit.rest.repos.compareCommitsWithBasehead({
                 owner: repo.owner,
                 repo: repo.repo,
@@ -34106,7 +34071,7 @@ class OctokitGitHubService {
         });
     }
     getBranchHeadSha(repo, branch) {
-        return this.run('resolve branch head', async () => {
+        return (0, octokitSupport_1.runOctokit)('resolve branch head', async () => {
             const { data } = await this.octokit.rest.repos.getBranch({
                 owner: repo.owner,
                 repo: repo.repo,
@@ -34116,7 +34081,7 @@ class OctokitGitHubService {
         });
     }
     updateBranchRef(repo, branch, sha, force = false) {
-        return this.run('update branch ref', async () => {
+        return (0, octokitSupport_1.runOctokit)('update branch ref', async () => {
             await this.octokit.rest.git.updateRef({
                 owner: repo.owner,
                 repo: repo.repo,
@@ -34145,66 +34110,184 @@ class OctokitGitHubService {
             if (error.status === 409) {
                 return { status: 'conflict' };
             }
-            throw toGitHubApiError(error, 'merge branches');
+            throw (0, octokitSupport_1.toGitHubApiError)(error, 'merge branches');
         }
     }
+}
+exports.OctokitBranchService = OctokitBranchService;
+
+
+/***/ }),
+
+/***/ 6563:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GitHubClient = void 0;
+/**
+ * Owns the single authenticated `Octokit`. This is the ONE place a concrete
+ * client is constructed, so a single rate-limit budget backs every per-domain
+ * service that wraps it.
+ *
+ * Lifecycle mirrors the services: {@link GitHubClient.getInstance} returns a
+ * process-wide cached client (throwing on a token mismatch),
+ * {@link GitHubClient.newInstance} builds an isolated one, and
+ * {@link GitHubClient.resetInstance} clears the cache (test-only).
+ */
+const rest_1 = __nccwpck_require__(6946);
+const errors_1 = __nccwpck_require__(272);
+class GitHubClient {
+    octokit;
+    static shared;
+    static sharedToken;
+    constructor(octokit) {
+        this.octokit = octokit;
+    }
+    /** Process-wide shared client; a later call with a different token throws. */
+    static getInstance(token) {
+        if (GitHubClient.shared) {
+            if (GitHubClient.sharedToken !== token) {
+                throw new errors_1.ValidationError('A shared GitHub client already exists for a different token. ' +
+                    'Call GitHubClient.resetInstance() first, or use a *.newInstance() for an isolated client.');
+            }
+            return GitHubClient.shared;
+        }
+        GitHubClient.sharedToken = token;
+        GitHubClient.shared = GitHubClient.newInstance(token);
+        return GitHubClient.shared;
+    }
+    /** Build a brand-new, isolated client. Never cached. */
+    static newInstance(token) {
+        return new GitHubClient(new rest_1.Octokit({ auth: token }));
+    }
+    /** Drop the cached shared client so the next get rebuilds it. Test-only. */
+    static resetInstance() {
+        GitHubClient.shared = undefined;
+        GitHubClient.sharedToken = undefined;
+    }
+}
+exports.GitHubClient = GitHubClient;
+
+
+/***/ }),
+
+/***/ 9459:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.toGitHubApiError = toGitHubApiError;
+exports.runOctokit = runOctokit;
+/**
+ * Tiny helpers shared by the Octokit-backed domain services: uniform error
+ * wrapping so every wrapper reports failures as {@link GitHubApiError}.
+ */
+const errors_1 = __nccwpck_require__(272);
+/** Wrap an unknown thrown value into a {@link GitHubApiError} for `operation`. */
+function toGitHubApiError(error, operation) {
+    const status = error.status;
+    const message = error instanceof Error ? error.message : String(error);
+    return new errors_1.GitHubApiError(`Failed to ${operation}: ${message}`, status);
+}
+/** Run an Octokit call, rethrowing any failure as a {@link GitHubApiError}. */
+async function runOctokit(operation, fn) {
+    try {
+        return await fn();
+    }
+    catch (error) {
+        throw toGitHubApiError(error, operation);
+    }
+}
+
+
+/***/ }),
+
+/***/ 4766:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.OctokitGitHubService = void 0;
+/**
+ * The composed {@link GitHubService} facade. It holds no Octokit itself: it
+ * delegates each operation to an injected {@link BranchService} /
+ * {@link PullRequestService}, and its singleton statics compose the per-domain
+ * singletons so a single {@link GitHubClient} (one rate-limit budget) backs every
+ * call. The constructor stays injectable so tests can pass fake sub-services.
+ */
+const errors_1 = __nccwpck_require__(272);
+const gitHubClient_1 = __nccwpck_require__(6563);
+const octokitBranchService_1 = __nccwpck_require__(8846);
+const octokitPullRequestService_1 = __nccwpck_require__(8205);
+class OctokitGitHubService {
+    branch;
+    pulls;
+    static shared;
+    static sharedToken;
+    constructor(branch, pulls) {
+        this.branch = branch;
+        this.pulls = pulls;
+    }
+    /**
+     * Return the process-wide shared facade, composing the per-domain singletons
+     * (which all share one {@link GitHubClient}). A later call with a different
+     * token throws — call {@link OctokitGitHubService.resetInstance} first, or
+     * {@link OctokitGitHubService.newInstance} for an isolated client.
+     */
+    static getInstance(token) {
+        if (OctokitGitHubService.shared) {
+            if (OctokitGitHubService.sharedToken !== token) {
+                throw new errors_1.ValidationError('A shared GitHub service already exists for a different token. ' +
+                    'Call OctokitGitHubService.resetInstance() first, or use OctokitGitHubService.newInstance() for an isolated client.');
+            }
+            return OctokitGitHubService.shared;
+        }
+        OctokitGitHubService.sharedToken = token;
+        OctokitGitHubService.shared = new OctokitGitHubService(octokitBranchService_1.OctokitBranchService.getInstance(token), octokitPullRequestService_1.OctokitPullRequestService.getInstance(token));
+        return OctokitGitHubService.shared;
+    }
+    /** Build an isolated facade whose sub-services share one fresh client. */
+    static newInstance(token) {
+        const { octokit } = gitHubClient_1.GitHubClient.newInstance(token);
+        return new OctokitGitHubService(new octokitBranchService_1.OctokitBranchService(octokit), new octokitPullRequestService_1.OctokitPullRequestService(octokit));
+    }
+    /** Drop the cached shared facade so the next get rebuilds it. Test-only. */
+    static resetInstance() {
+        OctokitGitHubService.shared = undefined;
+        OctokitGitHubService.sharedToken = undefined;
+    }
+    // BranchService
+    compareBranches(repo, base, head) {
+        return this.branch.compareBranches(repo, base, head);
+    }
+    getBranchHeadSha(repo, branch) {
+        return this.branch.getBranchHeadSha(repo, branch);
+    }
+    updateBranchRef(repo, branch, sha, force) {
+        return this.branch.updateBranchRef(repo, branch, sha, force);
+    }
+    mergeBranches(repo, base, head, commitMessage) {
+        return this.branch.mergeBranches(repo, base, head, commitMessage);
+    }
+    // PullRequestService
     listOpenPullRequests(repo, params) {
-        return this.run('list pull requests', async () => {
-            const { data } = await this.octokit.rest.pulls.list({
-                owner: repo.owner,
-                repo: repo.repo,
-                state: 'open',
-                head: `${repo.owner}:${params.head}`,
-                base: params.base,
-            });
-            return data.map(toPullRequestSummary);
-        });
+        return this.pulls.listOpenPullRequests(repo, params);
     }
     createPullRequest(repo, params) {
-        return this.run('create pull request', async () => {
-            const { data } = await this.octokit.rest.pulls.create({
-                owner: repo.owner,
-                repo: repo.repo,
-                head: params.head,
-                base: params.base,
-                title: params.title,
-                body: params.body,
-                draft: params.draft ?? false,
-            });
-            return toPullRequestSummary(data);
-        });
+        return this.pulls.createPullRequest(repo, params);
     }
     updatePullRequest(repo, pullNumber, params) {
-        return this.run('update pull request', async () => {
-            const { data } = await this.octokit.rest.pulls.update({
-                owner: repo.owner,
-                repo: repo.repo,
-                pull_number: pullNumber,
-                title: params.title,
-                body: params.body,
-            });
-            return toPullRequestSummary(data);
-        });
+        return this.pulls.updatePullRequest(repo, pullNumber, params);
     }
     addLabels(repo, pullNumber, labels) {
-        return this.run('add labels', async () => {
-            await this.octokit.rest.issues.addLabels({
-                owner: repo.owner,
-                repo: repo.repo,
-                issue_number: pullNumber,
-                labels,
-            });
-        });
+        return this.pulls.addLabels(repo, pullNumber, labels);
     }
     requestReviewers(repo, pullNumber, reviewers) {
-        return this.run('request reviewers', async () => {
-            await this.octokit.rest.pulls.requestReviewers({
-                owner: repo.owner,
-                repo: repo.repo,
-                pull_number: pullNumber,
-                reviewers,
-            });
-        });
+        return this.pulls.requestReviewers(repo, pullNumber, reviewers);
     }
 }
 exports.OctokitGitHubService = OctokitGitHubService;
@@ -34238,6 +34321,120 @@ function parseRepoRef(value) {
 
 /***/ }),
 
+/***/ 8205:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.OctokitPullRequestService = void 0;
+const errors_1 = __nccwpck_require__(272);
+const gitHubClient_1 = __nccwpck_require__(6563);
+const octokitSupport_1 = __nccwpck_require__(9459);
+function toPullRequestSummary(pr) {
+    return {
+        number: pr.number,
+        htmlUrl: pr.html_url,
+        title: pr.title,
+        state: pr.state,
+        draft: pr.draft ?? false,
+        headRef: pr.head.ref,
+        baseRef: pr.base.ref,
+    };
+}
+class OctokitPullRequestService {
+    octokit;
+    static shared;
+    static sharedToken;
+    constructor(octokit) {
+        this.octokit = octokit;
+    }
+    /** Shared instance over the shared {@link GitHubClient}; throws on token mismatch. */
+    static getInstance(token) {
+        if (OctokitPullRequestService.shared) {
+            if (OctokitPullRequestService.sharedToken !== token) {
+                throw new errors_1.ValidationError('A shared pull request service already exists for a different token. ' +
+                    'Call OctokitPullRequestService.resetInstance() first, or use OctokitPullRequestService.newInstance() for an isolated client.');
+            }
+            return OctokitPullRequestService.shared;
+        }
+        OctokitPullRequestService.sharedToken = token;
+        OctokitPullRequestService.shared = new OctokitPullRequestService(gitHubClient_1.GitHubClient.getInstance(token).octokit);
+        return OctokitPullRequestService.shared;
+    }
+    /** Build an isolated service over a fresh client. Never cached. */
+    static newInstance(token) {
+        return new OctokitPullRequestService(gitHubClient_1.GitHubClient.newInstance(token).octokit);
+    }
+    /** Drop the cached shared instance so the next get rebuilds it. Test-only. */
+    static resetInstance() {
+        OctokitPullRequestService.shared = undefined;
+        OctokitPullRequestService.sharedToken = undefined;
+    }
+    listOpenPullRequests(repo, params) {
+        return (0, octokitSupport_1.runOctokit)('list pull requests', async () => {
+            const { data } = await this.octokit.rest.pulls.list({
+                owner: repo.owner,
+                repo: repo.repo,
+                state: 'open',
+                head: `${repo.owner}:${params.head}`,
+                base: params.base,
+            });
+            return data.map(toPullRequestSummary);
+        });
+    }
+    createPullRequest(repo, params) {
+        return (0, octokitSupport_1.runOctokit)('create pull request', async () => {
+            const { data } = await this.octokit.rest.pulls.create({
+                owner: repo.owner,
+                repo: repo.repo,
+                head: params.head,
+                base: params.base,
+                title: params.title,
+                body: params.body,
+                draft: params.draft ?? false,
+            });
+            return toPullRequestSummary(data);
+        });
+    }
+    updatePullRequest(repo, pullNumber, params) {
+        return (0, octokitSupport_1.runOctokit)('update pull request', async () => {
+            const { data } = await this.octokit.rest.pulls.update({
+                owner: repo.owner,
+                repo: repo.repo,
+                pull_number: pullNumber,
+                title: params.title,
+                body: params.body,
+            });
+            return toPullRequestSummary(data);
+        });
+    }
+    addLabels(repo, pullNumber, labels) {
+        return (0, octokitSupport_1.runOctokit)('add labels', async () => {
+            await this.octokit.rest.issues.addLabels({
+                owner: repo.owner,
+                repo: repo.repo,
+                issue_number: pullNumber,
+                labels,
+            });
+        });
+    }
+    requestReviewers(repo, pullNumber, reviewers) {
+        return (0, octokitSupport_1.runOctokit)('request reviewers', async () => {
+            await this.octokit.rest.pulls.requestReviewers({
+                owner: repo.owner,
+                repo: repo.repo,
+                pull_number: pullNumber,
+                reviewers,
+            });
+        });
+    }
+}
+exports.OctokitPullRequestService = OctokitPullRequestService;
+
+
+/***/ }),
+
 /***/ 9745:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -34248,7 +34445,7 @@ function parseRepoRef(value) {
  * import only from `@gforce/core`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.SYNC_STRATEGIES = exports.validateSyncBranchesInputs = exports.runSyncBranchesAction = exports.syncBranches = exports.parseRepoRef = exports.OctokitGitHubService = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
+exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.SYNC_STRATEGIES = exports.validateSyncBranchesInputs = exports.runSyncBranchesAction = exports.syncBranches = exports.parseRepoRef = exports.OctokitGitHubService = exports.OctokitPullRequestService = exports.OctokitBranchService = exports.GitHubClient = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
 // Result + errors
 var result_1 = __nccwpck_require__(3860);
 Object.defineProperty(exports, "ok", ({ enumerable: true, get: function () { return result_1.ok; } }));
@@ -34269,7 +34466,15 @@ Object.defineProperty(exports, "requireNonEmpty", ({ enumerable: true, get: func
 Object.defineProperty(exports, "parseBoolean", ({ enumerable: true, get: function () { return validation_1.parseBoolean; } }));
 Object.defineProperty(exports, "parseList", ({ enumerable: true, get: function () { return validation_1.parseList; } }));
 Object.defineProperty(exports, "parseEnum", ({ enumerable: true, get: function () { return validation_1.parseEnum; } }));
-var octokitGitHubService_1 = __nccwpck_require__(7102);
+// GitHub services (per-domain ports + Octokit implementations + singleton
+// statics, plus the composed facade) and value objects.
+var gitHubClient_1 = __nccwpck_require__(6563);
+Object.defineProperty(exports, "GitHubClient", ({ enumerable: true, get: function () { return gitHubClient_1.GitHubClient; } }));
+var octokitBranchService_1 = __nccwpck_require__(8846);
+Object.defineProperty(exports, "OctokitBranchService", ({ enumerable: true, get: function () { return octokitBranchService_1.OctokitBranchService; } }));
+var octokitPullRequestService_1 = __nccwpck_require__(8205);
+Object.defineProperty(exports, "OctokitPullRequestService", ({ enumerable: true, get: function () { return octokitPullRequestService_1.OctokitPullRequestService; } }));
+var octokitGitHubService_1 = __nccwpck_require__(4766);
 Object.defineProperty(exports, "OctokitGitHubService", ({ enumerable: true, get: function () { return octokitGitHubService_1.OctokitGitHubService; } }));
 var parseRepoRef_1 = __nccwpck_require__(9315);
 Object.defineProperty(exports, "parseRepoRef", ({ enumerable: true, get: function () { return parseRepoRef_1.parseRepoRef; } }));
@@ -36568,18 +36773,12 @@ module.exports = /*#__PURE__*/JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
-// This entry need to be wrapped in an IIFE because it need to be in strict mode.
-(() => {
-"use strict";
-var exports = __webpack_exports__;
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const main_1 = __nccwpck_require__(666);
-void (0, main_1.run)();
-
-})();
-
-module.exports = __webpack_exports__;
+/******/ 	
+/******/ 	// startup
+/******/ 	// Load entry module and return exports
+/******/ 	// This entry module is referenced by other modules so it can't be inlined
+/******/ 	var __webpack_exports__ = __nccwpck_require__(1719);
+/******/ 	module.exports = __webpack_exports__;
+/******/ 	
 /******/ })()
 ;

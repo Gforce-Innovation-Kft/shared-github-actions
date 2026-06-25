@@ -13,7 +13,7 @@ module.exports = {
   },
   moduleFileExtensions: ['ts', 'js', 'json'],
   collectCoverage: true,
-  collectCoverageFrom: ['src/**/*.ts', '!src/index.ts'],
+  collectCoverageFrom: ['src/**/*.ts'],
   coverageThreshold: {
     global: {
       branches: 90,

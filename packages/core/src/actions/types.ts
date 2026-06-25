@@ -3,7 +3,7 @@
  * (repo from the environment, logger over the toolkit, the shared GitHub
  * service) and injected into the portable `run*Action` helpers.
  */
-import type { GitHubService } from '../github-service/githubService';
+import type { GitHubService } from '../github-service/github/gitHubService';
 import type { RepoRef } from '../github-service/types';
 import type { Logger } from '../utils/logging/logger';
 
