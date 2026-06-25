@@ -31,3 +31,22 @@ When adding new reusable workflows:
 ## License
 
 [Add your license information here]
+
+
+save what we have in a commit
+we can use singelton pattern, 
+.github/actions/sync-branches/src/
+main.ts
+index.ts
+orchatrator.ts
+bit overkill i think one of it should be enoough
+
+hwhich actually call the shared action
+in the shared actoin we defined the busniess logic, and each method
+compare
+fastforward
+merge
+createPR
+are those which are defined in the service
+
+so make sure we use

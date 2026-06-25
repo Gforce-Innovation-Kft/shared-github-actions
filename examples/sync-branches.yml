@@ -1,0 +1,37 @@
+# Example caller for the sync-branches TypeScript action.
+# Copy into a consuming repo's .github/workflows/ and adjust branches.
+name: Sync develop into main
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Plan only (make no changes)'
+        type: boolean
+        default: true
+
+# fast-forward / merge updates the target ref; a merge conflict opens a sync PR.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync branches
+        id: sync
+        uses: gforceinnovation/shared-github-actions/.github/actions/sync-branches@main
+        with:
+          source-branch: develop
+          target-branch: main
+          strategy: auto
+          dry-run: ${{ inputs.dry-run }}
+
+      - name: Report outcome
+        run: |
+          echo "action=${{ steps.sync.outputs.action }}"
+          echo "synced=${{ steps.sync.outputs.synced }}"
+          echo "ahead-by=${{ steps.sync.outputs.ahead-by }}"
+          echo "behind-by=${{ steps.sync.outputs.behind-by }}"
+          echo "pull-request=${{ steps.sync.outputs.pull-request-url }}"

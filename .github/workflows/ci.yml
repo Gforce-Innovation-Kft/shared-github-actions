@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck:all
+
+      - name: Bundle actions
+        run: npm run bundle:all
+
+      - name: Test (per-package 90% coverage)
+        run: npm run test:all
+
+      - name: Verify committed dist is current
+        run: npm run dist:verify
+
+      # Strict on purpose: this repo IS a shared GitHub Actions library, so a
+      # broken workflow/action manifest must fail CI rather than ship.
+      - name: Lint workflows
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            packages/*/coverage
+            .github/actions/*/coverage
+          if-no-files-found: ignore
