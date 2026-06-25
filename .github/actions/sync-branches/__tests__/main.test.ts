@@ -1,6 +1,6 @@
 import { runGitHubAction } from '@gforce/github-actions-runtime';
 import { runSyncBranchesAction, validateSyncBranchesInputs } from '@gforce/core';
-import { run, syncBranchesAction } from '../src/main';
+import { run, syncBranchesAction } from '../src/index';
 import { readInputs } from '../src/inputReader';
 import { writeOutputs } from '../src/outputWriter';
 

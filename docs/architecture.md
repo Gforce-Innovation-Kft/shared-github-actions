@@ -29,46 +29,52 @@ Pure helpers that the runtime needs (e.g. `parseRepoRef('owner/repo')`) stay in
 core; only the environment access (`process.env.GITHUB_REPOSITORY`) lives in the
 runtime.
 
-## One wrapper per API operation (why the shared module exists)
+## Per-domain services + one wrapper per API operation
 
-Every external GitHub call is wrapped **exactly once** as a typed method on the
-`GitHubService` port and implemented **only** in `OctokitGitHubService` — the
-single module that touches `@octokit/rest`:
+Every external GitHub call is wrapped **exactly once** as a typed method on a
+per-domain service **port**, implemented **only** by its `Octokit*Service` (the
+only modules that touch `@octokit/rest`). The ports mirror the type layout:
 
-| Concept       | Method(s)                                   |
-| ------------- | ------------------------------------------- |
-| compare       | `compareBranches`                           |
-| fast-forward  | `getBranchHeadSha` + `updateBranchRef`      |
-| merge         | `mergeBranches` (maps `409` -> `conflict`)  |
-| createPR      | `listOpenPullRequests` / `createPullRequest`/ `updatePullRequest` |
-| labels/review | `addLabels` / `requestReviewers`            |
+| Domain (module)        | Port                  | Wrapper(s)                                                     |
+| ---------------------- | --------------------- | -------------------------------------------------------------- |
+| `branch/`              | `BranchService`       | `compareBranches`, `getBranchHeadSha`, `updateBranchRef`, `mergeBranches` (maps `409` -> `conflict`) |
+| `pull-request/`        | `PullRequestService`  | `listOpenPullRequests`, `createPullRequest`, `updatePullRequest`, `addLabels`, `requestReviewers` |
+| `action/`             | `ActionsService` (stub) | `dispatchWorkflow` (reserved — no impl yet)                  |
 
-Use cases (`syncBranches`, `createReleasePr`) and adapters call these methods,
-never a raw client, so the same wrapper is reused across actions instead of
-duplicated. A new action is assembled from existing wrappers.
+`github/gitHubService.ts` defines the **facade** `GitHubService extends
+BranchService, PullRequestService` and `github/octokitGitHubService.ts` composes
+the per-domain services, delegating each method. Use cases (`syncBranches`,
+`createReleasePr`) and adapters depend on the facade, never a raw client, so the
+same wrapper is reused across actions. A new action is assembled from existing
+wrappers; a new domain adds a `*Service` port + `Octokit*Service` and folds into
+the facade.
 
-### Singleton service (static instance methods)
+### Singletons (static instance methods) + one shared client
 
-`OctokitGitHubService` owns its own lifecycle through static methods:
+Each service owns its own lifecycle through the same static trio
+(`getInstance(token)` cached / `newInstance(token)` isolated / `resetInstance()`
+test-only); `getInstance` throws on a token mismatch rather than acting under the
+wrong identity. To keep a **single rate-limit budget**, the one authenticated
+`Octokit` is owned by a `client/GitHubClient` singleton:
 
-- `OctokitGitHubService.getInstance(token)` returns a process-wide cached
-  instance, so a single authenticated client (and its rate-limit budget) backs
-  every call within a run. A later `getInstance` with a **different** token
-  throws, rather than silently acting under the wrong identity.
-- `OctokitGitHubService.newInstance(token)` always builds a fresh, isolated
-  instance — for tests or advanced callers that need their own client.
-- `OctokitGitHubService.resetInstance()` clears the cache (test-only).
+- `GitHubClient.getInstance(token)` builds the client once; every
+  `Octokit*Service.getInstance(token)` wraps that same client.
+- `OctokitGitHubService.getInstance(token)` composes the branch + PR singletons,
+  so one client backs the whole facade.
+- `*.newInstance(token)` builds an isolated client (the facade's `newInstance`
+  shares one fresh client across its sub-services).
 
-The constructor stays injectable (`new OctokitGitHubService(octokit)`), so tests
-can pass a fake `Octokit`. The runtime's `runGitHubAction` calls `getInstance`
-when no service override is supplied.
+Every constructor stays injectable (`new OctokitBranchService(octokit)`,
+`new OctokitGitHubService(branch, pulls)`), so tests pass fakes. The runtime's
+`runGitHubAction` calls `OctokitGitHubService.getInstance` when no service
+override is supplied.
 
 ## Result and errors
 
 Use cases return `Result<T, AppError>` (`ok` / `err`) rather than throwing across
-the boundary. `OctokitGitHubService` wraps failures in `GitHubApiError`
-(`ValidationError`, `AppError` for the rest). The adapter turns an `err` into
-`core.setFailed`.
+the boundary. The `Octokit*Service`s wrap API failures in `GitHubApiError` (via
+the shared `client/octokitSupport` helper; `ValidationError`/`AppError` for the
+rest). The adapter turns an `err` into `core.setFailed`.
 
 ## The adapter template
 
@@ -79,13 +85,14 @@ service composition, the run loop) lives in `@gforce/core` or
 
 ```
 src/
-  index.ts        # ncc entry: `void run()`  (excluded from coverage)
-  main.ts         # builds the GitHubActionDefinition and calls runGitHubAction
+  index.ts        # ncc entry: builds the GitHubActionDefinition, run(), and a
+                  #   `require.main === module` guard that calls run() only when
+                  #   executed as the action (not when imported by tests)
   inputReader.ts  # @actions/core getInput -> Raw*Inputs (type from core)
   outputWriter.ts # result -> core.setOutput (kebab-case)
 ```
 
-`main.ts` is declarative — it names the four collaborators and delegates the loop:
+`index.ts` is declarative — it names the four collaborators and delegates the loop:
 
 ```ts
 export const syncBranchesAction = {

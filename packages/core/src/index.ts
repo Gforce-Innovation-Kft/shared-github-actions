@@ -15,9 +15,16 @@ export type { Logger } from './utils/logging/logger';
 // Validation helpers
 export { requireNonEmpty, parseBoolean, parseList, parseEnum } from './utils/validation/validation';
 
-// GitHub service (port + implementation + singleton statics + value objects)
-export type { GitHubService } from './github-service/githubService';
-export { OctokitGitHubService } from './github-service/octokitGitHubService';
+// GitHub services (per-domain ports + Octokit implementations + singleton
+// statics, plus the composed facade) and value objects.
+export { GitHubClient } from './github-service/client/gitHubClient';
+export type { BranchService } from './github-service/branch/branchService';
+export { OctokitBranchService } from './github-service/branch/octokitBranchService';
+export type { PullRequestService } from './github-service/pull-request/pullRequestService';
+export { OctokitPullRequestService } from './github-service/pull-request/octokitPullRequestService';
+export type { ActionsService } from './github-service/action/actionsService';
+export type { GitHubService } from './github-service/github/gitHubService';
+export { OctokitGitHubService } from './github-service/github/octokitGitHubService';
 export { parseRepoRef } from './github-service/parseRepoRef';
 export type {
   RepoRef,

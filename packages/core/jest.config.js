@@ -12,7 +12,11 @@ module.exports = {
     'src/**/*.ts',
     '!src/index.ts',
     '!src/**/types.ts',
-    '!src/github-service/githubService.ts',
+    // Service interfaces (type-only); the octokit*Service impls + client stay covered.
+    '!src/github-service/branch/branchService.ts',
+    '!src/github-service/pull-request/pullRequestService.ts',
+    '!src/github-service/action/actionsService.ts',
+    '!src/github-service/github/gitHubService.ts',
     '!src/git-service/**',
     '!src/sfdx-service/**',
   ],
