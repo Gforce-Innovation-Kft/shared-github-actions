@@ -33,7 +33,9 @@ coverage/
 .nyc_output/
 
 # Build outputs
-dist/
+# NOTE: bundled TypeScript-action output under .github/actions/*/dist IS committed
+# (GitHub runs actions from the committed dist). Only library build artifacts are ignored.
+packages/*/dist/
 build/
 *.tgz
 

@@ -1,0 +1,44 @@
+{
+  "name": "shared-github-actions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-assisted reusable GitHub Actions, composite actions, and TypeScript actions for gforceinnovation",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/github-actions-runtime",
+    ".github/actions/sync-branches",
+    ".github/actions/create-release-pr"
+  ],
+  "scripts": {
+    "format": "prettier --write \"**/*.{ts,mjs,cjs,js}\"",
+    "format:check": "prettier --check \"**/*.{ts,mjs,cjs,js}\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck:all": "npm run typecheck --workspaces --if-present",
+    "build:all": "npm run typecheck:all",
+    "test:all": "npm run test --workspaces --if-present",
+    "bundle:all": "npm run bundle --workspaces --if-present",
+    "dist:verify": "git diff --exit-code -- .github/actions/sync-branches/dist .github/actions/create-release-pr/dist",
+    "all": "npm run format:check && npm run lint && npm run typecheck:all && npm run bundle:all && npm run test:all && npm run dist:verify",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.15",
+    "@vercel/ncc": "^0.38.1",
+    "eslint": "^9.9.0",
+    "eslint-config-prettier": "^9.1.0",
+    "husky": "^9.1.5",
+    "jest": "^29.7.0",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.3.0"
+  }
+}
