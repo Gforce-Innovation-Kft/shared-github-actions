@@ -1,10 +1,22 @@
 import type { Octokit } from '@octokit/rest';
 import { ValidationError } from '../src/utils/errors/errors';
 import { GitHubClient } from '../src/github-service/client/gitHubClient';
-import { OctokitPullRequestService } from '../src/github-service/pull-request/octokitPullRequestService';
+import { OctokitPullRequestService } from '../src/github-service/pull-request/pullRequestService';
 import { REPO } from './support/fakes';
 
-function createFakeOctokit() {
+interface FakeOctokit {
+  rest: {
+    pulls: {
+      list: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      requestReviewers: jest.Mock;
+    };
+    issues: { addLabels: jest.Mock };
+  };
+}
+
+function createFakeOctokit(): FakeOctokit {
   return {
     rest: {
       pulls: {
@@ -17,8 +29,6 @@ function createFakeOctokit() {
     },
   };
 }
-
-type FakeOctokit = ReturnType<typeof createFakeOctokit>;
 
 function service(fake: FakeOctokit): OctokitPullRequestService {
   return new OctokitPullRequestService(fake as unknown as Octokit);

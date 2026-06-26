@@ -1,7 +1,7 @@
 import { GitHubClient } from '../src/github-service/client/gitHubClient';
-import { OctokitGitHubService } from '../src/github-service/github/octokitGitHubService';
-import { OctokitBranchService } from '../src/github-service/branch/octokitBranchService';
-import { OctokitPullRequestService } from '../src/github-service/pull-request/octokitPullRequestService';
+import { OctokitGitHubService } from '../src/github-service/github/gitHubService';
+import { OctokitBranchService } from '../src/github-service/branch/branchService';
+import { OctokitPullRequestService } from '../src/github-service/pull-request/pullRequestService';
 import { ValidationError } from '../src/utils/errors/errors';
 import {
   createFakeBranchService,

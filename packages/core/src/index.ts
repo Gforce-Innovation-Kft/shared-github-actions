@@ -15,16 +15,17 @@ export type { Logger } from './utils/logging/logger';
 // Validation helpers
 export { requireNonEmpty, parseBoolean, parseList, parseEnum } from './utils/validation/validation';
 
-// GitHub services (per-domain ports + Octokit implementations + singleton
-// statics, plus the composed facade) and value objects.
+// GitHub services. Each domain colocates its port + Octokit implementation in
+// one file (singleton statics included); the facade composes them. Value objects
+// live in each domain's types.ts.
 export { GitHubClient } from './github-service/client/gitHubClient';
-export type { BranchService } from './github-service/branch/branchService';
-export { OctokitBranchService } from './github-service/branch/octokitBranchService';
-export type { PullRequestService } from './github-service/pull-request/pullRequestService';
-export { OctokitPullRequestService } from './github-service/pull-request/octokitPullRequestService';
+export { OctokitBranchService, type BranchService } from './github-service/branch/branchService';
+export {
+  OctokitPullRequestService,
+  type PullRequestService,
+} from './github-service/pull-request/pullRequestService';
 export type { ActionsService } from './github-service/action/actionsService';
-export type { GitHubService } from './github-service/github/gitHubService';
-export { OctokitGitHubService } from './github-service/github/octokitGitHubService';
+export { OctokitGitHubService, type GitHubService } from './github-service/github/gitHubService';
 export { parseRepoRef } from './github-service/parseRepoRef';
 export type {
   RepoRef,

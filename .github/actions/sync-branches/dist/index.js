@@ -34005,7 +34005,7 @@ function validateSyncBranchesInputs(raw) {
 
 /***/ }),
 
-/***/ 8846:
+/***/ 8859:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -34205,7 +34205,7 @@ async function runOctokit(operation, fn) {
 
 /***/ }),
 
-/***/ 4766:
+/***/ 1641:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -34213,16 +34213,20 @@ async function runOctokit(operation, fn) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.OctokitGitHubService = void 0;
 /**
- * The composed {@link GitHubService} facade. It holds no Octokit itself: it
- * delegates each operation to an injected {@link BranchService} /
- * {@link PullRequestService}, and its singleton statics compose the per-domain
- * singletons so a single {@link GitHubClient} (one rate-limit budget) backs every
- * call. The constructor stays injectable so tests can pass fake sub-services.
+ * The composed GitHub service: the {@link GitHubService} facade port and its
+ * {@link OctokitGitHubService} implementation, colocated.
+ *
+ * The facade is the single object orchestrators and action adapters depend on;
+ * it exposes the union of the per-domain services and delegates to them. It holds
+ * no Octokit itself — its singleton statics compose the per-domain singletons so
+ * one shared {@link GitHubClient} (one rate-limit budget) backs every call. New
+ * domains (e.g. an ActionsService for `workflow_dispatch`) are folded in here as
+ * they gain implementations.
  */
 const errors_1 = __nccwpck_require__(272);
 const gitHubClient_1 = __nccwpck_require__(6563);
-const octokitBranchService_1 = __nccwpck_require__(8846);
-const octokitPullRequestService_1 = __nccwpck_require__(8205);
+const branchService_1 = __nccwpck_require__(8859);
+const pullRequestService_1 = __nccwpck_require__(3224);
 class OctokitGitHubService {
     branch;
     pulls;
@@ -34247,13 +34251,13 @@ class OctokitGitHubService {
             return OctokitGitHubService.shared;
         }
         OctokitGitHubService.sharedToken = token;
-        OctokitGitHubService.shared = new OctokitGitHubService(octokitBranchService_1.OctokitBranchService.getInstance(token), octokitPullRequestService_1.OctokitPullRequestService.getInstance(token));
+        OctokitGitHubService.shared = new OctokitGitHubService(branchService_1.OctokitBranchService.getInstance(token), pullRequestService_1.OctokitPullRequestService.getInstance(token));
         return OctokitGitHubService.shared;
     }
     /** Build an isolated facade whose sub-services share one fresh client. */
     static newInstance(token) {
         const { octokit } = gitHubClient_1.GitHubClient.newInstance(token);
-        return new OctokitGitHubService(new octokitBranchService_1.OctokitBranchService(octokit), new octokitPullRequestService_1.OctokitPullRequestService(octokit));
+        return new OctokitGitHubService(new branchService_1.OctokitBranchService(octokit), new pullRequestService_1.OctokitPullRequestService(octokit));
     }
     /** Drop the cached shared facade so the next get rebuilds it. Test-only. */
     static resetInstance() {
@@ -34321,7 +34325,7 @@ function parseRepoRef(value) {
 
 /***/ }),
 
-/***/ 8205:
+/***/ 3224:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -34466,16 +34470,17 @@ Object.defineProperty(exports, "requireNonEmpty", ({ enumerable: true, get: func
 Object.defineProperty(exports, "parseBoolean", ({ enumerable: true, get: function () { return validation_1.parseBoolean; } }));
 Object.defineProperty(exports, "parseList", ({ enumerable: true, get: function () { return validation_1.parseList; } }));
 Object.defineProperty(exports, "parseEnum", ({ enumerable: true, get: function () { return validation_1.parseEnum; } }));
-// GitHub services (per-domain ports + Octokit implementations + singleton
-// statics, plus the composed facade) and value objects.
+// GitHub services. Each domain colocates its port + Octokit implementation in
+// one file (singleton statics included); the facade composes them. Value objects
+// live in each domain's types.ts.
 var gitHubClient_1 = __nccwpck_require__(6563);
 Object.defineProperty(exports, "GitHubClient", ({ enumerable: true, get: function () { return gitHubClient_1.GitHubClient; } }));
-var octokitBranchService_1 = __nccwpck_require__(8846);
-Object.defineProperty(exports, "OctokitBranchService", ({ enumerable: true, get: function () { return octokitBranchService_1.OctokitBranchService; } }));
-var octokitPullRequestService_1 = __nccwpck_require__(8205);
-Object.defineProperty(exports, "OctokitPullRequestService", ({ enumerable: true, get: function () { return octokitPullRequestService_1.OctokitPullRequestService; } }));
-var octokitGitHubService_1 = __nccwpck_require__(4766);
-Object.defineProperty(exports, "OctokitGitHubService", ({ enumerable: true, get: function () { return octokitGitHubService_1.OctokitGitHubService; } }));
+var branchService_1 = __nccwpck_require__(8859);
+Object.defineProperty(exports, "OctokitBranchService", ({ enumerable: true, get: function () { return branchService_1.OctokitBranchService; } }));
+var pullRequestService_1 = __nccwpck_require__(3224);
+Object.defineProperty(exports, "OctokitPullRequestService", ({ enumerable: true, get: function () { return pullRequestService_1.OctokitPullRequestService; } }));
+var gitHubService_1 = __nccwpck_require__(1641);
+Object.defineProperty(exports, "OctokitGitHubService", ({ enumerable: true, get: function () { return gitHubService_1.OctokitGitHubService; } }));
 var parseRepoRef_1 = __nccwpck_require__(9315);
 Object.defineProperty(exports, "parseRepoRef", ({ enumerable: true, get: function () { return parseRepoRef_1.parseRepoRef; } }));
 // sync-branches use case + action seam

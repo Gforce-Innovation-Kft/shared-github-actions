@@ -33,21 +33,22 @@ runtime.
 
 Every external GitHub call is wrapped **exactly once** as a typed method on a
 per-domain service **port**, implemented **only** by its `Octokit*Service` (the
-only modules that touch `@octokit/rest`). The ports mirror the type layout:
+only modules that touch `@octokit/rest`). Each domain colocates its **port +
+implementation in one file** (`<domain>Service.ts`), next to its `types.ts`:
 
-| Domain (module)        | Port                  | Wrapper(s)                                                     |
-| ---------------------- | --------------------- | -------------------------------------------------------------- |
-| `branch/`              | `BranchService`       | `compareBranches`, `getBranchHeadSha`, `updateBranchRef`, `mergeBranches` (maps `409` -> `conflict`) |
-| `pull-request/`        | `PullRequestService`  | `listOpenPullRequests`, `createPullRequest`, `updatePullRequest`, `addLabels`, `requestReviewers` |
-| `action/`             | `ActionsService` (stub) | `dispatchWorkflow` (reserved — no impl yet)                  |
+| Module / file                        | Port + impl (same file)                  | Wrapper(s)                                                     |
+| ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------- |
+| `branch/branchService.ts`            | `BranchService` + `OctokitBranchService` | `compareBranches`, `getBranchHeadSha`, `updateBranchRef`, `mergeBranches` (maps `409` -> `conflict`) |
+| `pull-request/pullRequestService.ts` | `PullRequestService` + `OctokitPullRequestService` | `listOpenPullRequests`, `createPullRequest`, `updatePullRequest`, `addLabels`, `requestReviewers` |
+| `action/actionsService.ts`           | `ActionsService` (stub, no impl yet)     | `dispatchWorkflow` (reserved)                                  |
 
-`github/gitHubService.ts` defines the **facade** `GitHubService extends
-BranchService, PullRequestService` and `github/octokitGitHubService.ts` composes
-the per-domain services, delegating each method. Use cases (`syncBranches`,
-`createReleasePr`) and adapters depend on the facade, never a raw client, so the
-same wrapper is reused across actions. A new action is assembled from existing
-wrappers; a new domain adds a `*Service` port + `Octokit*Service` and folds into
-the facade.
+`github/gitHubService.ts` holds the **facade** `GitHubService extends
+BranchService, PullRequestService` **and** the `OctokitGitHubService` that
+composes the per-domain services, delegating each method. Use cases
+(`syncBranches`, `createReleasePr`) and adapters depend on the facade, never a raw
+client, so the same wrapper is reused across actions. A new action is assembled
+from existing wrappers; a new domain adds one `<domain>Service.ts` (port + impl)
+and folds into the facade.
 
 ### Singletons (static instance methods) + one shared client
 
