@@ -4,13 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-A collection of reusable GitHub Actions composite actions and callable workflows for Salesforce CI/CD pipelines. The GitHub org is `gforceinnovation`.
+Reusable GitHub Actions for `gforceinnovation`: **TypeScript actions** (a portable
+core plus thin adapters), **composite actions**, and **callable workflows** for
+Salesforce CI/CD pipelines.
 
 ## Reference Pattern
 
 From other repos, reference items using:
-- Composite actions: `gforceinnovation/shared-github-actions/.github/actions/<action-name>@main`
+- Composite / TypeScript actions: `gforceinnovation/shared-github-actions/.github/actions/<action-name>@main`
 - Reusable workflows: `gforceinnovation/shared-github-actions/.github/workflows/<workflow-name>.yml@main`
+
+## TypeScript Actions (npm-workspaces monorepo)
+
+`@actions/core` lives ONLY in the runtime/adapter layer; `packages/core` is
+portable and free of any runner API.
+
+| Path | Role |
+|------|------|
+| `packages/core` | Portable business logic: use cases (`actions/*`), GitHub services (`github-service/*`), validation, result/errors. No `@actions/*`. |
+| `packages/github-actions-runtime` | `@actions/core` adapter: `ActionsLogger`, `readRepoFromEnvironment`, the `runGitHubAction` loop. |
+| `.github/actions/<name>` | Thin adapter: `index.ts` (definition + guarded `run()`), `inputReader.ts`, `outputWriter.ts`, committed `dist/index.js`. |
+
+GitHub API calls are wrapped once per domain service (`BranchService`,
+`PullRequestService`) behind the composed `GitHubService` facade; each service is
+a singleton (`getInstance` cached / `newInstance` isolated / `resetInstance`),
+all sharing one `GitHubClient` (Octokit). `@octokit/rest` is a dependency of
+`packages/core` only.
+
+### `sync-branches`
+Fast-forward / merge / open a sync PR on conflict. `dry-run` defaults to `true`.
+Caller permissions: `contents: write` + `pull-requests: write`.
+
+### `create-release-pr`
+Create or update a release PR (templated body, labels, reviewers). `dry-run`
+defaults to `true`. Caller permissions: `contents: read` + `pull-requests: write`.
+
+**Adding an action:** follow `docs/typescript-action-authoring.md`; the design
+rationale is in `docs/architecture.md`. **Before any PR, run `npm run all`**
+(format + lint + typecheck + bundle + test + `dist:verify`) and ensure it passes.
 
 ## Composite Actions
 

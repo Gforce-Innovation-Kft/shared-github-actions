@@ -13,8 +13,11 @@ on:
         type: boolean
         default: true
 
+# Least privilege: this action only reads commits to compare branches and
+# creates/updates the PR (with labels + reviewers). It never moves a ref, so
+# contents stays read-only.
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:

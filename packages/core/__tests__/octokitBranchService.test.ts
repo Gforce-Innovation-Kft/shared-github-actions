@@ -1,10 +1,21 @@
 import type { Octokit } from '@octokit/rest';
 import { GitHubApiError, ValidationError } from '../src/utils/errors/errors';
 import { GitHubClient } from '../src/github-service/client/gitHubClient';
-import { OctokitBranchService } from '../src/github-service/branch/octokitBranchService';
+import { OctokitBranchService } from '../src/github-service/branch/branchService';
 import { REPO } from './support/fakes';
 
-function createFakeOctokit() {
+interface FakeOctokit {
+  rest: {
+    repos: {
+      compareCommitsWithBasehead: jest.Mock;
+      getBranch: jest.Mock;
+      merge: jest.Mock;
+    };
+    git: { updateRef: jest.Mock };
+  };
+}
+
+function createFakeOctokit(): FakeOctokit {
   return {
     rest: {
       repos: {
@@ -16,8 +27,6 @@ function createFakeOctokit() {
     },
   };
 }
-
-type FakeOctokit = ReturnType<typeof createFakeOctokit>;
 
 function service(fake: FakeOctokit): OctokitBranchService {
   return new OctokitBranchService(fake as unknown as Octokit);

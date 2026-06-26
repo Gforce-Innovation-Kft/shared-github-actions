@@ -16,9 +16,10 @@ collaborators and hands them to `runGitHubAction`. See
    - `validate<Name>Inputs.ts` — `Raw*Inputs -> Validated*Inputs` (reuses the
      shared validation helpers).
    Reuse existing `GitHubService` (facade) methods; only add a new method to the
-   relevant per-domain port + its `Octokit*Service` (and the facade) if no
-   wrapper exists yet — or a new `*Service` domain module if it's a new area.
-   Export everything from
+   relevant per-domain `<domain>Service.ts` (the port + its `Octokit*Service`
+   live in that one file) and the facade if no wrapper exists yet — or a new
+   `github-service/<domain>/<domain>Service.ts` if it's a new area (see
+   "Extending a GitHub service domain" below). Export everything from
    `packages/core/src/index.ts`. Add core unit tests.
 
 2. **Scaffold the action** under `.github/actions/<name>/`:
@@ -49,7 +50,79 @@ collaborators and hands them to `runGitHubAction`. See
    `npm run all`. Commit `dist/index.js` (the pre-commit hook keeps it in sync).
 
 6. **Document.** Add an example caller to `examples/<name>.yml` and a row to the
-   README / CLAUDE action tables.
+   README / CLAUDE action tables. State the **least-privilege permissions** the
+   action needs (e.g. `contents: read` vs `write`, `pull-requests: write`).
+
+## Action skeleton (copy/paste)
+
+The adapter is always these three files. Only the names and the four collaborators
+change between actions.
+
+```text
+.github/actions/<name>/src/
+  index.ts        # definition + run() + require.main guard (below)
+  inputReader.ts  # core.getInput(...) -> Raw*Inputs  (type imported from @gforce/core)
+  outputWriter.ts # result -> core.setOutput(...)     (kebab-case keys)
+```
+
+```ts
+// src/index.ts — the entire adapter wiring
+import {
+  run<Name>Action,
+  validate<Name>Inputs,
+  type ActionContext,
+  type Raw<Name>Inputs,
+  type Validated<Name>Inputs,
+  type <Name>Result,
+} from '@gforce/core';
+import { runGitHubAction, type GitHubActionDefinition } from '@gforce/github-actions-runtime';
+import { readInputs } from './inputReader';
+import { writeOutputs } from './outputWriter';
+
+export const <name>Action: GitHubActionDefinition<
+  Raw<Name>Inputs,
+  Validated<Name>Inputs,
+  <Name>Result
+> = {
+  readInputs,
+  validateInputs: validate<Name>Inputs,
+  execute: run<Name>Action,
+  writeOutputs,
+};
+
+/** Action entrypoint. `overrides` is for tests; production passes nothing. */
+export function run(overrides?: Partial<ActionContext>): Promise<void> {
+  return runGitHubAction(<name>Action, overrides);
+}
+
+/* istanbul ignore next -- runner-only entry guard; tests import and call run() directly */
+if (require.main === module) {
+  void run();
+}
+```
+
+## Extending a GitHub service domain
+
+GitHub API wrappers live in `packages/core/src/github-service/<domain>/`, one file
+per domain holding **both** the port and its single Octokit implementation:
+
+```text
+github-service/<domain>/
+  <domain>Service.ts   # export interface <Domain>Service { ... }
+                       # export class Octokit<Domain>Service implements <Domain>Service
+                       #   - constructor(octokit) — injectable for fakes
+                       #   - static getInstance/newInstance/resetInstance (wrap GitHubClient)
+                       #   - one method per API call, via runOctokit(...)
+  types.ts             # value objects for the domain
+```
+
+- Reuse `client/GitHubClient` (the only `new Octokit(...)`) and
+  `client/octokitSupport` (`runOctokit`, `toGitHubApiError`) — don't re-roll error
+  wrapping or client construction.
+- Fold a new domain into the facade `github/gitHubService.ts` (`GitHubService
+  extends ...`, plus delegating methods on `OctokitGitHubService`).
+- Service interfaces stay covered (the impl is colocated); only a pure
+  interface-only stub is excluded in `jest.config.js`.
 
 ## Rules (also for AI agents)
 
@@ -59,9 +132,9 @@ collaborators and hands them to `runGitHubAction`. See
 - **Never import `@actions/core` (or any runner API) in `packages/core`.** Anything
   `@actions/*`-bound belongs in `@gforce/github-actions-runtime`. Pure helpers
   (e.g. `parseRepoRef`) stay in core; only the env read lives in the runtime.
-- **One wrapper per GitHub API call**, in the relevant `Octokit*Service` only
-  (`@octokit/rest` is touched nowhere else). Reuse it; don't call Octokit from a
-  use case or adapter.
+- **One wrapper per GitHub API call**, on the relevant domain's `Octokit*Service`
+  class in `<domain>Service.ts` (`@octokit/rest` is touched nowhere else). Reuse
+  it; don't call Octokit from a use case or adapter.
 - **Build the service via `OctokitGitHubService.getInstance(token)`** (the runtime
   does this for you) — don't `new Octokit()` in an adapter. Use
   `newInstance`/`resetInstance` only for test isolation.
