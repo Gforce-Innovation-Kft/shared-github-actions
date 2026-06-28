@@ -2,6 +2,10 @@ name: 'Sync Branches'
 description: 'Synchronize one branch into another via fast-forward, merge, or a sync pull request on conflict.'
 author: 'GForce Innovation'
 
+# Required caller permissions:
+#   contents: write        # fast-forward / merge the target branch
+#   pull-requests: write   # open a sync PR when the merge conflicts
+
 inputs:
   source-branch:
     description: 'Branch to take changes from.'

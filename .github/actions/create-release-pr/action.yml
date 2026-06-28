@@ -2,6 +2,10 @@ name: 'Create Release PR'
 description: 'Create or update a release pull request between two branches, with templated title/body, labels, and reviewers.'
 author: 'GForce Innovation'
 
+# Required caller permissions:
+#   contents: read         # compare branches
+#   pull-requests: write   # create/update the release PR, labels, reviewers
+
 inputs:
   source-branch:
     description: 'Branch containing the changes to release.'

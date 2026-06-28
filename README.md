@@ -40,7 +40,9 @@ title/body, labels, and reviewers.
 ## Composite Actions
 
 - **`get-aws-secret`** — fetch a secret from AWS Secrets Manager via OIDC role
-  assumption; JSON fields are exported as env vars.
+  assumption; JSON fields are exported as env vars (reference them as
+  `${{ env.FIELD }}`, not step outputs). Requires `id-token: write` +
+  `contents: read`.
 - **`sf-jwt-login`** — authenticate to a Salesforce org via JWT bearer flow
   (wraps `get-aws-secret`, decodes the key, cleans up).
 
