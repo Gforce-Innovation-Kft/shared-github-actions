@@ -47,10 +47,10 @@ rationale is in `docs/architecture.md`. **Before any PR, run `npm run all`**
 
 ### `get-aws-secret` (`.github/actions/get-aws-secret/action.yml`)
 
-Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSON secret fields are set as environment variables.
+Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSON secret fields are set as environment variables. Requires caller permissions `id-token: write` + `contents: read`.
 
 **Inputs:** `aws-region` (default `eu-central-1`), `secret-name`, `aws-role-arn`
-**Outputs:** Secret fields exposed as env vars (e.g. `$JWT_KEY_B64`, `$USERNAME`, `$CLIENT_ID`, `$INSTANCE_URL`).
+**Outputs:** None declared. Secret fields are exposed as env vars (e.g. `$JWT_KEY_B64`, `$USERNAME`, `$CLIENT_ID`, `$INSTANCE_URL`); reference them as `${{ env.FIELD }}` in later steps, not as step outputs.
 
 ### `sf-jwt-login` (`.github/actions/sf-jwt-login/action.yml`)
 

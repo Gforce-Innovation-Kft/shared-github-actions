@@ -62,6 +62,14 @@ describe('renderReleaseBody', () => {
     );
     expect(body).toBe('Release v1.2.3 from develop');
   });
+
+  it('replaces every occurrence of a known token and leaves unknown tokens untouched', () => {
+    const body = renderReleaseBody(
+      request({ bodyTemplate: '{{version}} / {{version}} / {{unknown}}' }),
+      compare(),
+    );
+    expect(body).toBe('v1.2.3 / v1.2.3 / {{unknown}}');
+  });
 });
 
 describe('createReleasePr', () => {

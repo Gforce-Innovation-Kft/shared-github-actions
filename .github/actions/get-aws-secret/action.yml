@@ -2,6 +2,15 @@ name: "Get AWS Secret"
 description: "Fetches a secret from AWS Secrets Manager and returns its value"
 author: "GForce Innovation"
 
+# Required caller permissions (for OIDC role assumption):
+#   id-token: write
+#   contents: read
+#
+# Outputs: none. The secret JSON is parsed (parse-json-secrets: true) and each
+# field is exported as an environment variable for later steps in the same job.
+# Reference fields as ${{ env.FIELD_NAME }} (e.g. ${{ env.JWT_KEY_B64 }}), not as
+# step outputs.
+
 inputs:
   aws-region:
     description: "AWS region where the secret is stored"
