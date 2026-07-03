@@ -80,3 +80,17 @@ A minimal test workflow that echoes a message. Used for verifying cross-repo wor
 - All shell steps in composite actions must specify `shell: bash`.
 - Commit messages use prefix format: `Add:`, `Fix:`, `Update:`, `Docs:`, `Test:`, `Refactor:`.
 - Always clean up sensitive files (keys, credentials) in an `if: always()` step.
+
+## Installed Skills
+
+Repo-scoped skills live in `.agents/skills/` (symlinked into `.claude/skills/`).
+Invoke the relevant one when the task matches:
+
+| Skill | Use when |
+|-------|----------|
+| `github-actions-docs` | Authoring/editing workflows or `action.yml` — keeps YAML aligned with current GitHub Actions syntax (composite/reusable/TypeScript action patterns). |
+| `requesting-code-review` | Preparing a change for review (e.g. before a `create-release-pr` / `sync-branches` PR). |
+| `receiving-code-review` | Responding to review feedback on a PR. |
+| `code-review` | Reviewing TypeScript for quality/correctness (`packages/core` + action adapters). |
+
+Manage with `npx skills check` / `npx skills update`.
