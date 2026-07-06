@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-Reusable GitHub Actions for `gforceinnovation`: **TypeScript actions** (a portable
+Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a portable
 core plus thin adapters), **composite actions**, and **callable workflows** for
 Salesforce CI/CD pipelines.
 
 ## Reference Pattern
 
 From other repos, reference items using:
-- Composite / TypeScript actions: `gforceinnovation/shared-github-actions/.github/actions/<action-name>@main`
-- Reusable workflows: `gforceinnovation/shared-github-actions/.github/workflows/<workflow-name>.yml@main`
+- Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v1`
+- Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<workflow-name>.yml@v1`
 
 ## TypeScript Actions (npm-workspaces monorepo)
 

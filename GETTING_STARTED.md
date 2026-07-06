@@ -31,7 +31,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1
     permissions:
       pull-requests: write
       contents: read
@@ -64,47 +64,38 @@ For private repositories:
 
 ## Versioning Strategy
 
-### Using Main Branch (Latest)
+### Using the Major Tag (Recommended)
 
 ```yaml
-uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1
 ```
 
-**Pros:** Always get the latest features and fixes
-**Cons:** Breaking changes may affect your workflows
+**Pros:** Fixes and non-breaking features arrive automatically; breaking changes never do (they bump the major)
+**Cons:** The tag moves — behavior can change between runs within the major
 
-### Using Release Tags (Recommended)
+### Using Exact Release Tags
 
 ```yaml
-uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@v1.0.0
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1.0.0
 ```
 
-**Pros:** Stable, predictable behavior
-**Cons:** Need to manually update to get new features
+**Pros:** Immutable, fully predictable behavior
+**Cons:** Need to manually update to get fixes and new features
 
-### Using Branch References
+### Using `@main`
 
-```yaml
-uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@release/v1
-```
-
-**Pros:** Get patch updates automatically
-**Cons:** May include minor breaking changes
+Development and testing only — unreleased changes land here and may break at
+any time. Never use `@main` in production callers.
 
 ## Creating a Release
 
-To create a versioned release:
+Push a semver tag from `main`; the [release workflow](.github/workflows/release.yml)
+creates the GitHub Release and force-moves the major tag (`v1`) automatically:
 
 ```bash
-git tag -a v1.0.0 -m "Release version 1.0.0"
+git checkout main && git pull
+git tag v1.0.0
 git push origin v1.0.0
-```
-
-For major version tracking, create a moving tag:
-
-```bash
-git tag -a v1 -m "Version 1.x"
-git push origin v1 --force
 ```
 
 ## Testing Your Reusable Workflows

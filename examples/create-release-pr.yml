@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Create or update the release PR
         id: release
-        uses: gforceinnovation/shared-github-actions/.github/actions/create-release-pr@main
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/create-release-pr@v1
         with:
           source-branch: develop
           target-branch: main
