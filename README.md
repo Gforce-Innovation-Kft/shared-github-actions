@@ -1,14 +1,17 @@
 # Shared GitHub Actions
 
-Reusable GitHub Actions for `gforceinnovation`: **TypeScript actions** (a portable
+Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a portable
 core + thin adapters), **composite actions**, and **callable workflows** for
 Salesforce CI/CD. Reference them from any repo in the org.
 
 ```text
-TypeScript action: gforceinnovation/shared-github-actions/.github/actions/<name>@main
-Composite action:  gforceinnovation/shared-github-actions/.github/actions/<name>@main
-Reusable workflow: gforceinnovation/shared-github-actions/.github/workflows/<name>.yml@main
+TypeScript action: Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
+Composite action:  Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
+Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<name>.yml@v1
 ```
+
+See [Versioning](#versioning) for how to pin (`@v1`, `@v1.2.0`, or a full
+commit SHA — avoid `@main` in production callers).
 
 ## TypeScript Actions
 
@@ -53,6 +56,23 @@ title/body, labels, and reviewers.
   `actions: read`.
 - **`test-simple.yml`** — minimal echo workflow for verifying cross-repo calls.
 
+## Versioning
+
+Releases follow semver, published as git tags with a floating major tag:
+
+| Pin | Example | Behavior |
+|-----|---------|----------|
+| Major tag | `@v1` | **Recommended.** Moves with every non-breaking release; you get fixes automatically. |
+| Exact tag | `@v1.2.0` | Immutable; bump manually. |
+| Commit SHA | `@93cb6ef…` | Strictest supply-chain pin; pair with Dependabot to stay current. |
+| `@main` | — | Development only. Unreleased, may break at any time. |
+
+Pushing a `vX.Y.Z` tag triggers [`release.yml`](.github/workflows/release.yml),
+which creates the GitHub Release and force-moves the `vX` major tag. Breaking
+changes bump the major (callers on the old `@v1` are unaffected until they move
+to `@v2`). The release procedure for maintainers is in
+[CONTRIBUTING.md](CONTRIBUTING.md#release-process).
+
 ## Repository Layout
 
 npm-workspaces monorepo:
@@ -86,8 +106,10 @@ rebuilds and re-stages action bundles; CI's `dist:verify` fails on a stale bundl
 
 ## Conventions
 
-- Reference actions/workflows by branch or tag (`@main`, `@v1`), never a moving
-  default in production.
+- Reference actions/workflows by release tag (`@v1`, `@v1.2.0`) — see
+  [Versioning](#versioning); never `@main` in production.
+- Third-party actions in this repo are pinned to full commit SHAs with a
+  `# vX.Y.Z` comment; Dependabot keeps them current.
 - Commit prefixes: `Add:`, `Fix:`, `Update:`, `Docs:`, `Test:`, `Refactor:`.
 - Composite actions use `using: "composite"` with `shell: bash`; always clean up
   secrets in an `if: always()` step.
