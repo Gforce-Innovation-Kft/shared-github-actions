@@ -192,13 +192,20 @@ PRs will be reviewed for:
 
 ## Release Process
 
-Maintainers will handle releases:
+Maintainers release by pushing a semver tag from `main`; automation does the rest:
 
-1. Update version in documentation
-2. Update CHANGELOG.md
-3. Create a git tag
-4. Create a GitHub release
-5. Update major version tag (e.g., v1) if needed
+1. Make sure `main` is green and contains everything for the release
+2. Tag and push:
+   ```bash
+   git checkout main && git pull
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+3. `.github/workflows/release.yml` then:
+   - creates the GitHub Release with generated notes
+   - force-moves the floating major tag (`v1`) to the same commit
+4. Breaking change? Bump the major (`v2.0.0`) — callers pinned to `@v1` keep
+   working until they opt in to `@v2`
 
 ## Questions?
 
