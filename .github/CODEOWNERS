@@ -1,0 +1,10 @@
+# Default owners for everything in the repo — required reviewers on PRs
+# touching these paths (once branch protection enables "Require review from
+# Code Owners").
+* @gambe94
+
+# The shared action/workflow surface consumed by other repos: any change here
+# affects every caller.
+/.github/actions/ @gambe94
+/.github/workflows/ @gambe94
+/packages/ @gambe94

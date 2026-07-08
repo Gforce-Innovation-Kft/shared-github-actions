@@ -12,7 +12,7 @@ import { run } from '../src/index';
 
 jest.mock('@actions/core');
 
-const REPO = { owner: 'gforceinnovation', repo: 'demo' };
+const REPO = { owner: 'Gforce-Innovation-Kft', repo: 'demo' };
 const LOGGER = { debug() {}, info() {}, warning() {}, error() {} };
 
 function stubInputs(overrides: Record<string, string> = {}): void {

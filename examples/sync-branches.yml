@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Sync branches
         id: sync
-        uses: gforceinnovation/shared-github-actions/.github/actions/sync-branches@main
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sync-branches@v1
         with:
           source-branch: develop
           target-branch: main

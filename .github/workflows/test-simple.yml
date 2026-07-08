@@ -21,7 +21,9 @@ jobs:
     steps:
       - name: Echo message
         id: echo
+        env:
+          MESSAGE: ${{ inputs.message }}
         run: |
-          echo "Message: ${{ inputs.message }}"
-          echo "result=${{ inputs.message }}" >> $GITHUB_OUTPUT
+          echo "Message: $MESSAGE"
+          echo "result=$MESSAGE" >> "$GITHUB_OUTPUT"
           echo "✅ Shared workflow executed successfully!"

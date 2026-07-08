@@ -71,7 +71,7 @@ If no dedicated GitHub Actions skill is available, continue with:
 
 ## Goal
 
-Design and implement this repository as an AI-assisted shared GitHub Actions repository for `gforceinnovation`.
+Design and implement this repository as an AI-assisted shared GitHub Actions repository for `Gforce-Innovation-Kft`.
 
 This repository must provide reusable GitHub Actions assets that other repositories can call:
 
@@ -89,9 +89,9 @@ This repository is currently mostly documentation.
 Existing documentation references shared assets like this:
 
 - Reusable workflows:
-  `gforceinnovation/shared-github-actions/.github/workflows/<workflow-name>.yml@main`
+  `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<workflow-name>.yml@main`
 - Composite actions:
-  `gforceinnovation/shared-github-actions/.github/actions/<action-name>@main`
+  `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@main`
 
 Preserve this convention unless there is a strong reason to change it.
 
