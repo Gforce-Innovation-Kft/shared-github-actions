@@ -94,3 +94,16 @@ Invoke the relevant one when the task matches:
 | `code-review` | Reviewing TypeScript for quality/correctness (`packages/core` + action adapters). |
 
 Manage with `npx skills check` / `npx skills update`.
+
+<!-- skills-tooling -->
+## Skills & AI tooling
+
+**External skills** (lockfile-managed — update with `npx skills check` / `npx skills update`):
+- `code-review` — from mattpocock/skills
+- `github-actions-docs` — from xixu-me/skills
+- `github-actions-templates` — from wshobson/agents
+- `receiving-code-review` — from obra/superpowers
+- `requesting-code-review` — from obra/superpowers
+
+**Global tooling available in every session:** lean-ctx (prefer `ctx_*` MCP tools for reads/search/shell — token-compressed), superpowers process skills, and graphify (no graph built for this repo).
+<!-- /skills-tooling -->
