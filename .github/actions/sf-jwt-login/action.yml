@@ -5,11 +5,11 @@ author: "GForce Innovation"
 inputs:
   aws-region:
     description: "AWS region where the secret is stored"
-    required: true
+    required: false
     default: "eu-central-1"
   secret-name:
     description: "Name of the secret in AWS Secrets Manager containing Salesforce credentials"
-    required: true
+    required: false
     default: "salesforce/gabor-devhub"
   aws-role-arn:
     description: "ARN of the AWS IAM role to assume (for OIDC authentication)"
@@ -34,8 +34,11 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Own-repo ref: composite actions cannot use relative paths, so this
+    # resolves at runtime. Kept on @main — callers pinning sf-jwt-login to an
+    # old tag still get the current get-aws-secret (known version-skew caveat).
     - name: Get Salesforce credentials from AWS Secrets Manager
-      uses: gforceinnovation/shared-github-actions/.github/actions/get-aws-secret@main
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/get-aws-secret@main
       with:
         aws-region: ${{ inputs.aws-region }}
         secret-name: ${{ inputs.secret-name }}
@@ -63,20 +66,29 @@ runs:
 
     - name: Salesforce JWT Login
       shell: bash
+      env:
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
       run: |
+        EXTRA_ARGS=()
+        if [ "$SET_DEFAULT_DEV_HUB" = "true" ]; then
+          EXTRA_ARGS+=(--set-default-dev-hub)
+        fi
         sf org login jwt \
           --username "$USERNAME" \
           --jwt-key-file jwt-key.txt \
           --client-id "$CLIENT_ID" \
           --instance-url "$INSTANCE_URL" \
-          --alias ${{ inputs.org-alias }} \
-          ${{ inputs.set-default-dev-hub == 'true' && '--set-default-dev-hub' || '' }}
+          --alias "$ORG_ALIAS" \
+          "${EXTRA_ARGS[@]}"
 
     - name: Display org info
       id: display-org
       shell: bash
+      env:
+        ORG_ALIAS: ${{ inputs.org-alias }}
       run: |
-        sf org display --target-org ${{ inputs.org-alias }} --json > org-info.json
+        sf org display --target-org "$ORG_ALIAS" --json > org-info.json
 
         ORG_ID=$(jq -r '.result.id' org-info.json)
         USERNAME=$(jq -r '.result.username' org-info.json)
@@ -87,7 +99,7 @@ runs:
         echo "✅ Successfully authenticated to Salesforce"
         echo "   Org ID: $ORG_ID"
         echo "   Username: $USERNAME"
-        echo "   Alias: ${{ inputs.org-alias }}"
+        echo "   Alias: $ORG_ALIAS"
 
     - name: Cleanup
       if: always()

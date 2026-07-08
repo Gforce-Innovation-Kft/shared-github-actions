@@ -1,0 +1,36 @@
+name: Release
+
+# Pushing a semver tag (vX.Y.Z) creates the GitHub Release and moves the
+# floating major tag (vX) to the same commit, so callers can pin either
+# `@vX` (moving) or `@vX.Y.Z` (immutable). See CONTRIBUTING.md for the
+# release procedure.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+
+      - name: Move floating major tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          MAJOR="${TAG%%.*}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa "$MAJOR" -m "Point $MAJOR at $TAG" "$TAG"
+          git push origin "$MAJOR" --force

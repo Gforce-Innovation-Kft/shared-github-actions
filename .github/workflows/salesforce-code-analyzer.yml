@@ -95,12 +95,14 @@ jobs:
       actions: read
     steps:
       - name: Check out files
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Verify workspace
+        env:
+          WORKSPACE: ${{ inputs.workspace }}
         run: |
           echo "Current directory: $PWD"
-          echo "Workspace input: ${{ inputs.workspace }}"
+          echo "Workspace input: $WORKSPACE"
           ls -la
           if [ -f "sfdx-project.json" ]; then
             echo "✅ Found sfdx-project.json"
@@ -111,18 +113,18 @@ jobs:
 
       # PREREQUISITES
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
         with:
           java-version: ${{ inputs.java-version }}
           distribution: "zulu"
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -134,7 +136,7 @@ jobs:
 
       - name: Run Salesforce Code Analyzer
         id: run-code-analyzer
-        uses: forcedotcom/run-code-analyzer@v2
+        uses: forcedotcom/run-code-analyzer@38a9be7f2dd5b18cf0f03e05f6f7a38b8f2662f6 # v2.12.0
         with:
           run-arguments: --workspace ${{ inputs.workspace }} --view ${{ inputs.view }} --output-file ${{ inputs.output-file-html }} --output-file ${{ inputs.output-file-json }}
           results-artifact-name: ${{ inputs.results-artifact-name }}
@@ -143,13 +145,15 @@ jobs:
       # Quality gate on ALL files in the repository
       - name: Check Violations (All Files)
         if: ${{ !inputs.fail-on-changed-files-only }}
+        env:
+          EXIT_CODE: ${{ steps.run-code-analyzer.outputs.exit-code }}
+          SEV1: ${{ steps.run-code-analyzer.outputs.num-sev1-violations }}
+          SEV2: ${{ steps.run-code-analyzer.outputs.num-sev2-violations }}
+          TOTAL: ${{ steps.run-code-analyzer.outputs.num-violations }}
+          MAX: ${{ inputs.max-violations }}
+          FAIL_ON_SEV1: ${{ inputs.fail-on-sev1-violations }}
+          FAIL_ON_SEV2: ${{ inputs.fail-on-sev2-violations }}
         run: |
-          EXIT_CODE=${{ steps.run-code-analyzer.outputs.exit-code }}
-          SEV1=${{ steps.run-code-analyzer.outputs.num-sev1-violations }}
-          SEV2=${{ steps.run-code-analyzer.outputs.num-sev2-violations }}
-          TOTAL=${{ steps.run-code-analyzer.outputs.num-violations }}
-          MAX=${{ inputs.max-violations }}
-          
           echo "Exit Code: $EXIT_CODE"
           echo "Severity 1 Violations: $SEV1"
           echo "Severity 2 Violations: $SEV2"
@@ -163,12 +167,12 @@ jobs:
             SHOULD_FAIL=true
           fi
           
-          if [ "${{ inputs.fail-on-sev1-violations }}" == "true" ] && [ "$SEV1" -gt 0 ]; then
+          if [ "$FAIL_ON_SEV1" == "true" ] && [ "$SEV1" -gt 0 ]; then
             echo "❌ Found $SEV1 severity 1 violations"
             SHOULD_FAIL=true
           fi
-          
-          if [ "${{ inputs.fail-on-sev2-violations }}" == "true" ] && [ "$SEV2" -gt 0 ]; then
+
+          if [ "$FAIL_ON_SEV2" == "true" ] && [ "$SEV2" -gt 0 ]; then
             echo "❌ Found $SEV2 severity 2 violations"
             SHOULD_FAIL=true
           fi
@@ -187,21 +191,23 @@ jobs:
       # Quality gate on CHANGED files only
       - name: Check Violations (Changed Files Only)
         if: ${{ inputs.fail-on-changed-files-only }}
+        env:
+          SEV1_CHANGED: ${{ steps.run-code-analyzer.outputs.num-sev1-violations-in-changed-files }}
+          SEV2_CHANGED: ${{ steps.run-code-analyzer.outputs.num-sev2-violations-in-changed-files }}
+          FAIL_ON_SEV1: ${{ inputs.fail-on-sev1-violations }}
+          FAIL_ON_SEV2: ${{ inputs.fail-on-sev2-violations }}
         run: |
-          SEV1_CHANGED=${{ steps.run-code-analyzer.outputs.num-sev1-violations-in-changed-files }}
-          SEV2_CHANGED=${{ steps.run-code-analyzer.outputs.num-sev2-violations-in-changed-files }}
-          
           echo "Severity 1 Violations in Changed Files: $SEV1_CHANGED"
           echo "Severity 2 Violations in Changed Files: $SEV2_CHANGED"
           
           SHOULD_FAIL=false
           
-          if [ "${{ inputs.fail-on-sev1-violations }}" == "true" ] && [ "$SEV1_CHANGED" -gt 0 ]; then
+          if [ "$FAIL_ON_SEV1" == "true" ] && [ "$SEV1_CHANGED" -gt 0 ]; then
             echo "❌ Found $SEV1_CHANGED severity 1 violations in changed files"
             SHOULD_FAIL=true
           fi
-          
-          if [ "${{ inputs.fail-on-sev2-violations }}" == "true" ] && [ "$SEV2_CHANGED" -gt 0 ]; then
+
+          if [ "$FAIL_ON_SEV2" == "true" ] && [ "$SEV2_CHANGED" -gt 0 ]; then
             echo "❌ Found $SEV2_CHANGED severity 2 violations in changed files"
             SHOULD_FAIL=true
           fi
