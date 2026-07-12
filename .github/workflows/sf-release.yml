@@ -63,6 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
     permissions:
       contents: read
     outputs:
@@ -217,6 +220,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
     # The caller's environment gate (required reviewers) pauses this job; GitHub
     # records the deployment automatically for environment-bound jobs.
     environment:
