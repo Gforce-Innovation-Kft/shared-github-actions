@@ -2,6 +2,25 @@
 
 This directory contains example workflows showing how to use the shared GitHub Actions in different scenarios.
 
+## Salesforce CI/CD Pair
+
+### `sf-pr-validate.yml`
+
+PR code health (Jest + scratch org): runs `npm test` when present, plus a
+scratch-org create/push/test/delete cycle against `config/scratch-orgs/ci.json`.
+One repository secret (`DEVHUB_AUTH_URL`) is the only setup.
+
+### `sf-release.yml`
+
+Release: delta validation on PRs, gated quick deploy on merge. On PRs it
+check-only deploys the delta against the target org and records the deploy
+request; on merge to main the `devhub` GitHub Environment holds the
+required-reviewer gate before the validated request is quick-deployed
+(fallback delta → full). Includes the `workflow_dispatch` bootstrap path
+(`gh workflow run sf-release.yml -f full-deploy=true`).
+
+Full setup guide: [docs/consuming-sf-cicd.md](../docs/consuming-sf-cicd.md).
+
 ## Salesforce Code Analyzer Examples
 
 ### Example 1: Basic PR Check

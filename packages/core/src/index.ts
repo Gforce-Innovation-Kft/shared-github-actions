@@ -77,3 +77,20 @@ export type {
   RawReleasePrInputs,
   ValidatedReleasePrInputs,
 } from './actions/createReleasePr/types';
+
+// find-relevant-tests use case + action seam
+export {
+  findRelevantTests,
+  parseApexMembers,
+  runFindTestsAction,
+} from './actions/findRelevantTests/findRelevantTests';
+export { validateFindTestsInputs } from './actions/findRelevantTests/validateFindTestsInputs';
+export { createNodeSourceFileReader } from './actions/findRelevantTests/nodeSourceFileReader';
+export type {
+  FindTestsRequest,
+  FindTestsResult,
+  FindTestsDeps,
+  SourceFileReader,
+  RawFindTestsInputs,
+  ValidatedFindTestsInputs,
+} from './actions/findRelevantTests/types';

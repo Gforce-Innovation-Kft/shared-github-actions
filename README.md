@@ -40,6 +40,18 @@ title/body, labels, and reviewers.
 > `dry-run` defaults to `true` on both actions — a caller must explicitly opt in
 > to mutating state.
 
+### `sf-find-tests`
+
+Select the Apex test classes relevant to a delta `package.xml` — naming-convention
+matches plus a reference scan of test classes in the source tree.
+
+- **Key inputs:** `package-xml`*, `source-dir` (default `force-app`),
+  `test-suffixes` (default `Test,_Test,Tests`), `github-token` (default
+  `${{ github.token }}` — this action makes no GitHub API calls; the input
+  exists only for the shared runtime).
+- **Key outputs:** `tests`, `test-count`, `has-apex`.
+- **Permissions:** none (no GitHub API calls).
+
 ## Composite Actions
 
 - **`get-aws-secret`** — fetch a secret from AWS Secrets Manager via OIDC role
@@ -48,12 +60,33 @@ title/body, labels, and reviewers.
   `contents: read`.
 - **`sf-jwt-login`** — authenticate to a Salesforce org via JWT bearer flow
   (wraps `get-aws-secret`, decodes the key, cleans up).
+- **`sf-org-login`** — authenticate to a Salesforce org from an SFDX auth URL
+  held in a GitHub secret (no cloud dependency). Outputs `org-id`, `username`,
+  `instance-url`; cleans up the auth file.
+- **`sf-delta-package`** — generate a delta `package.xml` between two git refs
+  with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
+  `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.
+  Requires a `fetch-depth: 0` checkout.
 
 ## Reusable Workflows
 
 - **`salesforce-code-analyzer.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
   `actions: read`.
+- **`sf-pr-validate.yml`** — PR code health: `jest` runs `npm test` when the
+  consumer's `package.json` has a `test` script (skips with a notice
+  otherwise); `scratch-org` creates a 1-day scratch org from
+  `config/scratch-orgs/ci.json`, deploys, assigns permission sets, runs
+  `RunLocalTests` with coverage, uploads results, always deletes the org.
+  Secret: `sfdx-auth-url`. Caller needs `contents: read`. See
+  [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
+- **`sf-release.yml`** — one workflow, two phases: on `pull_request`, a delta
+  package + `sf-find-tests`-selected Apex tests, check-only deploy against the
+  target org, and an `sf-release-<run>` handoff artifact; on `push` to main (or
+  `workflow_dispatch`), behind the caller's environment gate, quick-deploys the
+  validated request (fallback: delta → full; `full-deploy: true` forces the
+  full path). Secret: `sfdx-auth-url`. Caller needs `contents: read`,
+  `actions: read`. See [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
 - **`docker-build-test-push.yml`** — build → test → push for **one** Docker image
   (callers fan out with a matrix). Buildx build with per-image GHA cache scope,
   pytest-testinfra + Trivy SARIF test stage, multi-arch Docker Hub push with

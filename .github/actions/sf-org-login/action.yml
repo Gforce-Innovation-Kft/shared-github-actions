@@ -1,0 +1,93 @@
+name: "Salesforce Auth URL Login"
+description: "Authenticate to a Salesforce org using an SFDX auth URL stored in a GitHub secret"
+author: "GForce Innovation"
+
+inputs:
+  sfdx-auth-url:
+    description: "SFDX auth URL (force://...) — always pass a GitHub secret, never a literal"
+    required: true
+  org-alias:
+    description: "Alias for the Salesforce org"
+    required: false
+    default: "target"
+  set-default:
+    description: "Set this org as the default org"
+    required: false
+    default: "false"
+  set-default-dev-hub:
+    description: "Set this org as the default Dev Hub"
+    required: false
+    default: "false"
+
+outputs:
+  org-id:
+    description: "The Salesforce org ID"
+    value: ${{ steps.display-org.outputs.org-id }}
+  username:
+    description: "The authenticated username"
+    value: ${{ steps.display-org.outputs.username }}
+  instance-url:
+    description: "The org instance URL"
+    value: ${{ steps.display-org.outputs.instance-url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Salesforce auth URL login
+      shell: bash
+      env:
+        SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        SET_DEFAULT: ${{ inputs.set-default }}
+        SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$SFDX_AUTH_URL" ]; then
+          echo "::error::sfdx-auth-url is empty — pass the secret holding the force:// auth URL (sf org display --verbose --json | jq -r '.result.sfdxAuthUrl')" >&2
+          exit 1
+        fi
+
+        umask 077
+        printf '%s' "$SFDX_AUTH_URL" > sfdx-auth-url.txt
+
+        EXTRA_ARGS=()
+        if [ "$SET_DEFAULT" = "true" ]; then
+          EXTRA_ARGS+=(--set-default)
+        fi
+        if [ "$SET_DEFAULT_DEV_HUB" = "true" ]; then
+          EXTRA_ARGS+=(--set-default-dev-hub)
+        fi
+        sf org login sfdx-url \
+          --sfdx-url-file sfdx-auth-url.txt \
+          --alias "$ORG_ALIAS" \
+          "${EXTRA_ARGS[@]}"
+
+    - name: Display org info
+      id: display-org
+      shell: bash
+      env:
+        ORG_ALIAS: ${{ inputs.org-alias }}
+      run: |
+        set -euo pipefail
+        sf org display --target-org "$ORG_ALIAS" --json > org-info.json
+
+        # node instead of jq: node ships wherever the sf CLI runs (containers included)
+        ORG_ID=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.id")
+        USERNAME=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.username")
+        INSTANCE_URL=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.instanceUrl")
+
+        echo "org-id=$ORG_ID" >> "$GITHUB_OUTPUT"
+        echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
+        echo "instance-url=$INSTANCE_URL" >> "$GITHUB_OUTPUT"
+
+        echo "✅ Successfully authenticated to Salesforce"
+        echo "   Org ID: $ORG_ID"
+        echo "   Username: $USERNAME"
+        echo "   Alias: $ORG_ALIAS"
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        rm -f sfdx-auth-url.txt org-info.json

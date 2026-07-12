@@ -1,0 +1,1 @@
+@IsTest private class InvoicesSelectorTest {}
