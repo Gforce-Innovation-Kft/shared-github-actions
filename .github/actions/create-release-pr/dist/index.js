@@ -33837,6 +33837,176 @@ function validateCreateReleasePrInputs(raw) {
 
 /***/ }),
 
+/***/ 7814:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseApexMembers = parseApexMembers;
+exports.findRelevantTests = findRelevantTests;
+exports.runFindTestsAction = runFindTestsAction;
+/**
+ * Select the Apex test classes relevant to a delta package: naming-convention
+ * matches plus a reference scan of every test class in the source tree. Pure
+ * and filesystem-agnostic — file access goes through the injected reader.
+ */
+const result_1 = __nccwpck_require__(3860);
+const errors_1 = __nccwpck_require__(272);
+const nodeSourceFileReader_1 = __nccwpck_require__(2605);
+const APEX_TYPES = new Set(['ApexClass', 'ApexTrigger']);
+// @IsTest annotation or the legacy testMethod keyword marks a test class.
+const TEST_MARKER = /@IsTest|\btestmethod\b/i;
+/** Pull ApexClass/ApexTrigger member names out of a package.xml manifest. */
+function parseApexMembers(manifestXml) {
+    const names = [];
+    let hasWildcard = false;
+    for (const block of manifestXml.match(/<types>[\s\S]*?<\/types>/g) ?? []) {
+        const typeName = block.match(/<name>\s*([^<\s]+)\s*<\/name>/)?.[1] ?? '';
+        if (!APEX_TYPES.has(typeName)) {
+            continue;
+        }
+        for (const member of block.matchAll(/<members>\s*([^<]+?)\s*<\/members>/g)) {
+            const value = member[1];
+            if (value === undefined) {
+                continue;
+            }
+            if (value === '*') {
+                hasWildcard = true;
+            }
+            else {
+                names.push(value);
+            }
+        }
+    }
+    return { names, hasWildcard };
+}
+function findRelevantTests(request, deps) {
+    const manifest = deps.files.readFile(request.packageXmlPath);
+    const { names: changedNames, hasWildcard } = parseApexMembers(manifest);
+    if (changedNames.length === 0 && !hasWildcard) {
+        deps.logger.info('Delta contains no Apex classes or triggers — no tests to select.');
+        return { tests: [], testCount: 0, hasApex: false, changedApexNames: [] };
+    }
+    if (hasWildcard) {
+        deps.logger.warning('Delta manifest uses a wildcard Apex member — cannot scope tests; caller should run local tests.');
+        return { tests: [], testCount: 0, hasApex: true, changedApexNames: changedNames };
+    }
+    const sources = deps.files.listApexClassFiles(request.sourceDir).map((path) => {
+        const body = deps.files.readFile(path);
+        const fileName = path.replace(/\\/g, '/').split('/').pop() ?? '';
+        return { name: fileName.replace(/\.cls$/i, ''), body, isTest: TEST_MARKER.test(body) };
+    });
+    const testClasses = sources.filter((source) => source.isTest);
+    const changedLower = new Set(changedNames.map((name) => name.toLowerCase()));
+    const selected = new Set();
+    // A changed class that is itself a test class runs directly.
+    for (const test of testClasses) {
+        if (changedLower.has(test.name.toLowerCase())) {
+            selected.add(test.name);
+        }
+    }
+    const changedNonTest = changedNames.filter((name) => !testClasses.some((test) => test.name.toLowerCase() === name.toLowerCase()));
+    for (const name of changedNonTest) {
+        const reference = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
+        for (const test of testClasses) {
+            const nameMatch = request.testSuffixes.some((suffix) => test.name.toLowerCase() === `${name}${suffix}`.toLowerCase());
+            if (nameMatch || reference.test(test.body)) {
+                selected.add(test.name);
+            }
+        }
+    }
+    const tests = [...selected].sort((a, b) => a.localeCompare(b));
+    deps.logger.info(`Selected ${tests.length} test class(es) for ${changedNames.length} changed Apex member(s).`);
+    return { tests, testCount: tests.length, hasApex: true, changedApexNames: changedNames };
+}
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+/** Action seam: map validated inputs + context onto the use case. */
+async function runFindTestsAction(input, context) {
+    try {
+        const result = findRelevantTests({
+            packageXmlPath: input.packageXml,
+            sourceDir: input.sourceDir,
+            testSuffixes: input.testSuffixes,
+        }, { files: (0, nodeSourceFileReader_1.createNodeSourceFileReader)(), logger: context.logger });
+        return (0, result_1.ok)(result);
+    }
+    catch (error) {
+        return (0, result_1.err)((0, errors_1.asAppError)(error));
+    }
+}
+
+
+/***/ }),
+
+/***/ 2605:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createNodeSourceFileReader = createNodeSourceFileReader;
+/**
+ * Node `fs`-backed SourceFileReader. Kept apart from the use case so tests can
+ * inject an in-memory fake; `node:fs` is portable Node, not a runner API.
+ */
+const node_fs_1 = __nccwpck_require__(3024);
+const node_path_1 = __nccwpck_require__(6760);
+function createNodeSourceFileReader() {
+    return {
+        readFile(path) {
+            return (0, node_fs_1.readFileSync)(path, 'utf8');
+        },
+        listApexClassFiles(dir) {
+            const found = [];
+            const walk = (current) => {
+                for (const entry of (0, node_fs_1.readdirSync)(current, { withFileTypes: true })) {
+                    const path = (0, node_path_1.join)(current, entry.name);
+                    if (entry.isDirectory()) {
+                        walk(path);
+                    }
+                    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.cls')) {
+                        found.push(path);
+                    }
+                }
+            };
+            walk(dir);
+            return found;
+        },
+    };
+}
+
+
+/***/ }),
+
+/***/ 4598:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.validateFindTestsInputs = validateFindTestsInputs;
+/**
+ * Validate and normalize the raw sf-find-tests inputs. Portable: plain strings
+ * in, never touches `@actions/core`.
+ */
+const validation_1 = __nccwpck_require__(8968);
+const DEFAULT_SUFFIXES = ['Test', '_Test', 'Tests'];
+function validateFindTestsInputs(raw) {
+    const suffixes = (0, validation_1.parseList)(raw.testSuffixes);
+    return {
+        packageXml: (0, validation_1.requireNonEmpty)('package-xml', raw.packageXml),
+        sourceDir: (0, validation_1.requireNonEmpty)('source-dir', raw.sourceDir),
+        githubToken: (0, validation_1.requireNonEmpty)('github-token', raw.githubToken),
+        testSuffixes: suffixes.length > 0 ? suffixes : DEFAULT_SUFFIXES,
+    };
+}
+
+
+/***/ }),
+
 /***/ 4342:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -34450,7 +34620,7 @@ exports.OctokitPullRequestService = OctokitPullRequestService;
  * import only from `@gforce/core`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.SYNC_STRATEGIES = exports.validateSyncBranchesInputs = exports.runSyncBranchesAction = exports.syncBranches = exports.parseRepoRef = exports.OctokitGitHubService = exports.OctokitPullRequestService = exports.OctokitBranchService = exports.GitHubClient = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
+exports.createNodeSourceFileReader = exports.validateFindTestsInputs = exports.runFindTestsAction = exports.parseApexMembers = exports.findRelevantTests = exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.SYNC_STRATEGIES = exports.validateSyncBranchesInputs = exports.runSyncBranchesAction = exports.syncBranches = exports.parseRepoRef = exports.OctokitGitHubService = exports.OctokitPullRequestService = exports.OctokitBranchService = exports.GitHubClient = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
 // Result + errors
 var result_1 = __nccwpck_require__(3860);
 Object.defineProperty(exports, "ok", ({ enumerable: true, get: function () { return result_1.ok; } }));
@@ -34499,6 +34669,15 @@ Object.defineProperty(exports, "renderReleaseBody", ({ enumerable: true, get: fu
 Object.defineProperty(exports, "runCreateReleasePrAction", ({ enumerable: true, get: function () { return createReleasePr_1.runCreateReleasePrAction; } }));
 var validateCreateReleasePrInputs_1 = __nccwpck_require__(4025);
 Object.defineProperty(exports, "validateCreateReleasePrInputs", ({ enumerable: true, get: function () { return validateCreateReleasePrInputs_1.validateCreateReleasePrInputs; } }));
+// find-relevant-tests use case + action seam
+var findRelevantTests_1 = __nccwpck_require__(7814);
+Object.defineProperty(exports, "findRelevantTests", ({ enumerable: true, get: function () { return findRelevantTests_1.findRelevantTests; } }));
+Object.defineProperty(exports, "parseApexMembers", ({ enumerable: true, get: function () { return findRelevantTests_1.parseApexMembers; } }));
+Object.defineProperty(exports, "runFindTestsAction", ({ enumerable: true, get: function () { return findRelevantTests_1.runFindTestsAction; } }));
+var validateFindTestsInputs_1 = __nccwpck_require__(4598);
+Object.defineProperty(exports, "validateFindTestsInputs", ({ enumerable: true, get: function () { return validateFindTestsInputs_1.validateFindTestsInputs; } }));
+var nodeSourceFileReader_1 = __nccwpck_require__(2605);
+Object.defineProperty(exports, "createNodeSourceFileReader", ({ enumerable: true, get: function () { return nodeSourceFileReader_1.createNodeSourceFileReader; } }));
 
 
 /***/ }),
@@ -34969,6 +35148,22 @@ module.exports = require("node:crypto");
 
 "use strict";
 module.exports = require("node:events");
+
+/***/ }),
+
+/***/ 3024:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:fs");
+
+/***/ }),
+
+/***/ 6760:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:path");
 
 /***/ }),
 
