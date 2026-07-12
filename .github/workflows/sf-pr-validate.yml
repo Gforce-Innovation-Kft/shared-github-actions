@@ -28,6 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
     permissions:
       contents: read
     steps:
@@ -61,6 +64,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
     permissions:
       contents: read
     steps:
