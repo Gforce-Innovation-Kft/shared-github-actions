@@ -228,18 +228,6 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "${{ inputs.dockerhub-username }}/${{ inputs.image-name }}@${DIGEST}"
 
-      # Requires a read/write Docker Hub token (read-only tokens cannot update
-      # repository descriptions).
-      - name: Sync README to Docker Hub
-        if: ${{ inputs.image-description != '' }}
-        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77  # v4.0.2
-        with:
-          username: ${{ inputs.dockerhub-username }}
-          password: ${{ secrets.dockerhub-token }}
-          repository: ${{ inputs.dockerhub-username }}/${{ inputs.image-name }}
-          short-description: ${{ inputs.image-description }}
-          readme-filepath: ${{ inputs.context }}/README.md
-
       # Tool versions are read from the built image (source of truth, not the
       # Dockerfile) and aggregated by the caller's release job.
       - name: Build version report
@@ -270,3 +258,19 @@ jobs:
           name: version-report-${{ inputs.image-name }}
           path: version-report-${{ inputs.image-name }}.md
           retention-days: ${{ inputs.artifact-retention-days }}
+
+      # Cosmetic; must never fail the release path (v1.7.0 lesson: a Forbidden
+      # here skipped the version report and the caller's release job).
+      # Docker Hub's description PATCH needs a token with Read/Write/Delete
+      # scope (or the account password) — a push-scoped read/write token gets
+      # 403 Forbidden even though docker push works.
+      - name: Sync README to Docker Hub
+        if: ${{ inputs.image-description != '' }}
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77  # v4.0.2
+        with:
+          username: ${{ inputs.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
+          repository: ${{ inputs.dockerhub-username }}/${{ inputs.image-name }}
+          short-description: ${{ inputs.image-description }}
+          readme-filepath: ${{ inputs.context }}/README.md
