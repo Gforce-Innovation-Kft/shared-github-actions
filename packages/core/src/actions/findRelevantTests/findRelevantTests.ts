@@ -34,10 +34,14 @@ export function parseApexMembers(manifestXml: string): { names: string[]; hasWil
       continue;
     }
     for (const member of block.matchAll(/<members>\s*([^<]+?)\s*<\/members>/g)) {
-      if (member[1] === '*') {
+      const value = member[1];
+      if (value === undefined) {
+        continue;
+      }
+      if (value === '*') {
         hasWildcard = true;
       } else {
-        names.push(member[1]);
+        names.push(value);
       }
     }
   }

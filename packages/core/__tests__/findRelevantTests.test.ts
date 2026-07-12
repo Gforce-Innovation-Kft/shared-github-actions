@@ -7,6 +7,7 @@ import { NoopLogger } from '../src/utils/logging/logger';
 import { isErr } from '../src/utils/result/result';
 import type { SourceFileReader } from '../src/actions/findRelevantTests/types';
 import type { ActionContext } from '../src/actions/types';
+import type { GitHubService } from '../src/github-service/github/gitHubService';
 
 const MANIFEST = `<?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -47,7 +48,8 @@ function fakeReader(manifest: string, classes: Record<string, string>): SourceFi
         .split('/')
         .pop()!
         .replace(/\.cls$/, '');
-      if (name in classes) return classes[name];
+      const body = classes[name];
+      if (body !== undefined) return body;
       throw new Error(`unreadable: ${path}`);
     },
     listApexClassFiles(): string[] {
@@ -179,7 +181,11 @@ describe('findRelevantTests', () => {
   });
 
   it('runFindTestsAction returns an error when reading the package fails', async () => {
-    const context: ActionContext = { logger: NoopLogger };
+    const context: ActionContext = {
+      github: {} as GitHubService,
+      logger: NoopLogger,
+      repo: { owner: 'gforce', repo: 'test' },
+    };
     const input = {
       packageXml: '/nonexistent/path/package.xml',
       sourceDir: 'force-app',
