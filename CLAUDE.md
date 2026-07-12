@@ -39,6 +39,14 @@ Caller permissions: `contents: write` + `pull-requests: write`.
 Create or update a release PR (templated body, labels, reviewers). `dry-run`
 defaults to `true`. Caller permissions: `contents: read` + `pull-requests: write`.
 
+### `sf-find-tests`
+Select the Apex test classes relevant to a delta `package.xml` —
+naming-convention matches plus a reference scan of the source tree. Inputs:
+`package-xml` (required), `source-dir` (default `force-app`),
+`test-suffixes` (default `Test,_Test,Tests`). Outputs: `tests`, `test-count`,
+`has-apex`. Makes no GitHub API calls — `github-token` exists only for the
+shared action runtime; no caller permissions required.
+
 **Adding an action:** follow `docs/typescript-action-authoring.md`; the design
 rationale is in `docs/architecture.md`. **Before any PR, run `npm run all`**
 (format + lint + typecheck + bundle + test + `dist:verify`) and ensure it passes.
@@ -93,24 +101,24 @@ Builds, tests, and pushes **one** Docker image per invocation (callers matrix ov
 **Caller repo contract:** pytest suites at `tests/test_<image_name_with_underscores>.py` + `tests/requirements.txt`.
 **Do not rename/move this file** — its path is the cosign certificate identity (`job_workflow_ref`); renaming invalidates all documented `cosign verify` commands.
 
-### `sf-validate` (`.github/workflows/sf-validate.yml`)
+### `sf-pr-validate` (`.github/workflows/sf-pr-validate.yml`)
 
-Salesforce PR validation, designed as one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). Jobs: `validate` (delta package → check-only deploy with tests against the target org → `validation.json` quick-deploy handoff → `sf-validate-<run_number>` artifact, in a container), `analyze` (calls `salesforce-code-analyzer.yml` via same-repo relative ref, changed-files-only), `scratch-org` (optional: create/push/test/delete), `pr-comment` (sticky comment). Composite actions are referenced by absolute `@main` ref (they resolve against the caller's checkout — documented version-skew caveat).
+PR code health, one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). Jobs: `jest` (runs `npm test` when the consumer's `package.json` has a `test` script; skips with a notice otherwise) and `scratch-org` (creates a 1-day scratch org from `config/scratch-orgs/ci.json`, deploys the project, assigns permission sets, runs `RunLocalTests` with coverage, uploads the results, always deletes the org).
 
-**Key inputs:** `container-image` (default `gforceinnovation/sf-ci:latest`), `test-level`/`test-classes`, `source-dir`, `scratch-org-validation` + `scratch-def-path`, `retention-days`, analyzer gates
+**Key inputs:** `container-image` (default `gforceinnovation/sf-ci:latest`), `checkout-submodules` (default `recursive`), `retention-days`
 **Secrets:** `sfdx-auth-url` (required)
-**Outputs:** `has-changes`, `component-count`, `deploy-request-id`, `artifact-name`, analyzer violation counts
-**Caller permissions:** `contents: read`, `pull-requests: write`, `actions: read`
+**Outputs:** none declared
+**Caller permissions:** `contents: read`
 
-### `sf-deploy` (`.github/workflows/sf-deploy.yml`)
+### `sf-release` (`.github/workflows/sf-release.yml`)
 
-Gated Salesforce deploy bound to a caller GitHub Environment (`environment` input — reviewers/wait timers apply there). Creates a GitHub Deployment, then: quick deploy of the PR-validated request (looked up merge-commit → PR → head SHA → `sf-validate-*` artifact; valid only if org id + SHA match and <10 days old) → fallback delta deploy → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<environment>-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision) and sets the Deployment status with the Salesforce deploy-request URL.
+One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). On `pull_request`: `sf-delta-package` → `sf-find-tests` (naming + reference scan) → check-only deploy against the target org (`RunSpecifiedTests`, falling back to `RunLocalTests` when Apex changed but no covering tests were found; no test run for metadata-only deltas) → `validation.json` quick-deploy handoff uploaded in the `sf-release-<run_number>` artifact. On `push` to main (or `workflow_dispatch`): behind the caller's `environment` gate, quick-deploys the validated request (looked up merge-commit → PR → head SHA → `sf-release-*` artifact; valid only if org id + head SHA match and <10 days old) → fallback delta deploy (same recorded test plan) → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision).
 
-**Key inputs:** `environment` (required), `quick-deploy` (default `true`), `full-deploy` (default `false`), `test-level`/`test-classes`, `from-ref` (default `github.event.before`), `container-image`, `retention-days`
+**Key inputs:** `environment` (default `devhub`), `container-image`, `checkout-submodules`, `retention-days`, `full-deploy` (default `false`)
 **Secrets:** `sfdx-auth-url` (required)
 **Optional caller environment variable:** `SF_ORG_ALIAS` (defaults to the environment name)
-**Outputs:** `deploy-id`, `quick-deployed`, `org-id`, `username`, `artifact-name`
-**Caller permissions:** `contents: read`, `deployments: write`, `actions: read`
+**Outputs:** `component-count`, `deploy-request-id`, `tests` (PR runs); `deploy-id`, `quick-deployed` (push runs)
+**Caller permissions:** `contents: read`, `actions: read`
 
 ### `test-simple` (`.github/workflows/test-simple.yml`)
 
