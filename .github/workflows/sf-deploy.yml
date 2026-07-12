@@ -1,0 +1,431 @@
+name: Salesforce Deploy (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      sfdx-auth-url:
+        description: 'SFDX auth URL of the deployment target org'
+        required: true
+    inputs:
+      environment:
+        description: 'GitHub Environment on the caller repo this deploy targets (gates apply here)'
+        required: true
+        type: string
+      container-image:
+        description: 'Docker image the deploy job runs in'
+        required: false
+        default: 'gforceinnovation/sf-ci:latest'
+        type: string
+      test-level:
+        description: 'Apex test level for non-quick deploys'
+        required: false
+        default: 'RunLocalTests'
+        type: string
+      test-classes:
+        description: 'Comma-separated test classes (used with RunSpecifiedTests)'
+        required: false
+        default: ''
+        type: string
+      source-dir:
+        description: 'Salesforce source directory for delta generation'
+        required: false
+        default: 'force-app'
+        type: string
+      checkout-submodules:
+        description: 'Passed to actions/checkout submodules (false, true, recursive)'
+        required: false
+        default: 'recursive'
+        type: string
+      retention-days:
+        description: 'Retention for the deploy audit artifact'
+        required: false
+        default: 90
+        type: number
+      quick-deploy:
+        description: 'Attempt a quick deploy of the PR-validated deploy request'
+        required: false
+        default: true
+        type: boolean
+      from-ref:
+        description: 'Delta base ref (defaults to the previous push SHA, github.event.before)'
+        required: false
+        default: ''
+        type: string
+      full-deploy:
+        description: 'Deploy every package directory instead of a delta (bootstrap / re-baseline)'
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      deploy-id:
+        description: 'Salesforce deploy request id of this deployment'
+        value: ${{ jobs.deploy.outputs.deploy-id }}
+      quick-deployed:
+        description: 'true when the PR-validated request was quick-deployed'
+        value: ${{ jobs.deploy.outputs.quick-deployed }}
+      org-id:
+        description: 'Target org id'
+        value: ${{ jobs.deploy.outputs.org-id }}
+      username:
+        description: 'Deploying username'
+        value: ${{ jobs.deploy.outputs.username }}
+      artifact-name:
+        description: 'Name of the uploaded deploy audit artifact'
+        value: ${{ jobs.deploy.outputs.artifact-name }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.container-image }}
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.login.outputs.instance-url }}
+    permissions:
+      contents: read
+      deployments: write
+      actions: read
+    outputs:
+      deploy-id: ${{ steps.deploy.outputs.deploy-id }}
+      quick-deployed: ${{ steps.deploy.outputs.quick-deployed }}
+      org-id: ${{ steps.login.outputs.org-id }}
+      username: ${{ steps.login.outputs.username }}
+      artifact-name: sf-deploy-${{ inputs.environment }}-${{ github.run_number }}
+    steps:
+      - name: Check out files
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          submodules: ${{ inputs.checkout-submodules }}
+
+      # The environment: key above already records a native deployment; this API-created
+      # one additionally carries the Salesforce deploy-request URL in its status.
+      - name: Create GitHub Deployment
+        id: create-deployment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        with:
+          script: |
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: process.env.ENVIRONMENT,
+              auto_merge: false,
+              required_contexts: [],
+              description: `sf-deploy run ${context.runNumber}`,
+            });
+            if (!deployment.id) {
+              core.warning('Deployment record was not created: ' + JSON.stringify(deployment));
+              return;
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.id,
+              state: 'in_progress',
+              log_url: runUrl,
+            });
+            core.setOutput('deployment-id', deployment.id);
+
+      # Own-repo absolute ref: actions inside a reusable workflow resolve against the
+      # caller's checkout. Kept on @main — same version-skew caveat as sf-jwt-login.
+      - name: Salesforce login
+        id: login
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@main
+        with:
+          sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
+          org-alias: ${{ vars.SF_ORG_ALIAS || inputs.environment }}
+
+      - name: Find quick-deploy candidate
+        id: candidate
+        if: inputs.quick-deploy && !inputs.full-deploy
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            core.setOutput('found', 'false');
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const pr = prs.find((p) => p.merge_commit_sha === context.sha) || prs[0];
+            if (!pr) {
+              core.info('No pull request associated with this commit — skipping quick deploy.');
+              return;
+            }
+            const headSha = pr.head.sha;
+            const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: headSha,
+              status: 'success',
+              per_page: 50,
+            });
+            const sorted = runs.workflow_runs.sort(
+              (a, b) => new Date(b.created_at) - new Date(a.created_at)
+            );
+            for (const run of sorted) {
+              const { data: arts } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+              });
+              const artifact = arts.artifacts.find(
+                (a) => a.name.startsWith('sf-validate-') && !a.expired
+              );
+              if (artifact) {
+                core.setOutput('run-id', String(run.id));
+                core.setOutput('artifact-name', artifact.name);
+                core.setOutput('head-sha', headSha);
+                core.setOutput('found', 'true');
+                core.info(`Found validation artifact ${artifact.name} in run ${run.id} (PR #${pr.number}).`);
+                return;
+              }
+            }
+            core.info(`No successful validation run with an sf-validate artifact found for ${headSha}.`);
+
+      - name: Download validation artifact
+        if: steps.candidate.outputs.found == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ steps.candidate.outputs.artifact-name }}
+          run-id: ${{ steps.candidate.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: validated
+
+      - name: Decide quick deploy
+        id: decision
+        shell: bash
+        env:
+          CANDIDATE_FOUND: ${{ steps.candidate.outputs.found }}
+          CANDIDATE_HEAD_SHA: ${{ steps.candidate.outputs.head-sha }}
+          TARGET_ORG_ID: ${{ steps.login.outputs.org-id }}
+        run: |
+          set -euo pipefail
+          # Records the decision either way — part of the audit artifact
+          node -e "
+            const fs = require('fs');
+            const decision = { useQuick: false, reason: '', validation: null };
+            const finish = () => {
+              fs.writeFileSync('quick-deploy-decision.json', JSON.stringify(decision, null, 2));
+              console.log(decision.useQuick ? '✅ ' : 'ℹ️ ', decision.reason);
+            };
+            if (process.env.CANDIDATE_FOUND !== 'true') {
+              decision.reason = 'No validation artifact candidate found.';
+              finish(); return;
+            }
+            let v;
+            try {
+              v = JSON.parse(fs.readFileSync('validated/validation.json', 'utf8'));
+            } catch {
+              decision.reason = 'Validation artifact has no readable validation.json.';
+              finish(); return;
+            }
+            decision.validation = v;
+            const ageDays = (Date.now() - Date.parse(v.validatedAt)) / 86400000;
+            if (!v.deployId) decision.reason = 'validation.json has no deployId.';
+            else if (v.orgId !== process.env.TARGET_ORG_ID) decision.reason = 'Validated against a different org (' + v.orgId + ').';
+            else if (v.headSha !== process.env.CANDIDATE_HEAD_SHA) decision.reason = 'Validated SHA does not match the merged PR head.';
+            else if (!(ageDays < 10)) decision.reason = 'Validation is older than the 10-day quick-deploy window.';
+            else { decision.useQuick = true; decision.reason = 'Quick deploy of request ' + v.deployId + ' (validated ' + ageDays.toFixed(1) + ' days ago).'; }
+            finish();
+          "
+          USE_QUICK=$(node -pe "JSON.parse(require('fs').readFileSync('quick-deploy-decision.json','utf8')).useQuick")
+          QUICK_ID=$(node -pe "(JSON.parse(require('fs').readFileSync('quick-deploy-decision.json','utf8')).validation || {}).deployId || ''")
+          {
+            echo "use-quick=$USE_QUICK"
+            echo "quick-id=$QUICK_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve delta base ref
+        id: resolve-from
+        shell: bash
+        env:
+          INPUT_FROM_REF: ${{ inputs.from-ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          FULL_DEPLOY: ${{ inputs.full-deploy }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          FROM_REF="${INPUT_FROM_REF:-$EVENT_BEFORE}"
+          DELTA_VALID=true
+          if [ "$FULL_DEPLOY" = "true" ]; then
+            DELTA_VALID=false
+            echo "full-deploy requested — skipping delta generation"
+          elif [ -z "$FROM_REF" ] || [ "$FROM_REF" = "0000000000000000000000000000000000000000" ]; then
+            DELTA_VALID=false
+            echo "::warning::No usable delta base ref (new branch, force push or dispatch without from-ref) — falling back to a full deploy."
+          elif ! git rev-parse --verify --quiet "${FROM_REF}^{commit}" > /dev/null; then
+            DELTA_VALID=false
+            echo "::warning::Delta base ref $FROM_REF cannot be resolved — falling back to a full deploy."
+          fi
+          {
+            echo "from-ref=$FROM_REF"
+            echo "delta-valid=$DELTA_VALID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate delta package
+        id: delta
+        if: steps.resolve-from.outputs.delta-valid == 'true'
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-delta-package@main
+        with:
+          from-ref: ${{ steps.resolve-from.outputs.from-ref }}
+          to-ref: HEAD
+          source-dir: ${{ inputs.source-dir }}
+
+      - name: Deploy
+        id: deploy
+        shell: bash
+        env:
+          USE_QUICK: ${{ steps.decision.outputs.use-quick }}
+          QUICK_ID: ${{ steps.decision.outputs.quick-id }}
+          DELTA_VALID: ${{ steps.resolve-from.outputs.delta-valid }}
+          HAS_CHANGES: ${{ steps.delta.outputs.has-changes }}
+          PACKAGE_PATH: ${{ steps.delta.outputs.package-path }}
+          ORG_ALIAS: ${{ vars.SF_ORG_ALIAS || inputs.environment }}
+          TEST_LEVEL: ${{ inputs.test-level }}
+          TEST_CLASSES: ${{ inputs.test-classes }}
+        run: |
+          set -euo pipefail
+
+          TEST_ARGS=(--test-level "$TEST_LEVEL")
+          if [ "$TEST_LEVEL" = "RunSpecifiedTests" ] && [ -n "$TEST_CLASSES" ]; then
+            IFS=',' read -ra CLASSES <<< "$TEST_CLASSES"
+            for CLASS in "${CLASSES[@]}"; do
+              TEST_ARGS+=(--tests "$CLASS")
+            done
+          fi
+
+          MODE="none"
+          EXIT_CODE=0
+
+          if [ "$USE_QUICK" = "true" ]; then
+            echo "Attempting quick deploy of validated request $QUICK_ID"
+            set +e
+            sf project deploy quick --job-id "$QUICK_ID" --target-org "$ORG_ALIAS" --wait 60 --json > deploy-result.json
+            EXIT_CODE=$?
+            set -e
+            if [ "$EXIT_CODE" -eq 0 ]; then
+              MODE="quick"
+            else
+              echo "::warning::Quick deploy failed (request may be consumed or expired) — falling back to a delta deploy."
+              node -pe "try { JSON.parse(require('fs').readFileSync('deploy-result.json','utf8')).message || '' } catch (e) { '' }"
+            fi
+          fi
+
+          if [ "$MODE" = "none" ]; then
+            if [ "$DELTA_VALID" != "true" ]; then
+              echo "Full deploy of all package directories"
+              mapfile -t DIRS < <(node -pe "JSON.parse(require('fs').readFileSync('sfdx-project.json','utf8')).packageDirectories.map(d => d.path).join('\n')")
+              DIR_ARGS=()
+              for DIR in "${DIRS[@]}"; do
+                DIR_ARGS+=(--source-dir "$DIR")
+              done
+              set +e
+              sf project deploy start "${DIR_ARGS[@]}" --target-org "$ORG_ALIAS" "${TEST_ARGS[@]}" --wait 120 --json > deploy-result.json
+              EXIT_CODE=$?
+              set -e
+              MODE="full"
+            elif [ "$HAS_CHANGES" = "true" ]; then
+              echo "Delta deploy of $PACKAGE_PATH"
+              set +e
+              sf project deploy start --manifest "$PACKAGE_PATH" --target-org "$ORG_ALIAS" "${TEST_ARGS[@]}" --wait 60 --json > deploy-result.json
+              EXIT_CODE=$?
+              set -e
+              MODE="delta"
+            else
+              echo "No deployable metadata changes — nothing to deploy."
+              echo '{"result": {"status": "Skipped"}}' > deploy-result.json
+              MODE="skip"
+            fi
+          fi
+
+          DEPLOY_ID=$(node -pe "try { JSON.parse(require('fs').readFileSync('deploy-result.json','utf8')).result.id || '' } catch (e) { '' }")
+          {
+            echo "deploy-id=$DEPLOY_ID"
+            echo "quick-deployed=$([ "$MODE" = "quick" ] && echo true || echo false)"
+            echo "mode=$MODE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Deploy mode: $MODE (request: ${DEPLOY_ID:-n/a})"
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            node -e "
+              const r = JSON.parse(require('fs').readFileSync('deploy-result.json','utf8')).result || {};
+              const failures = ((r.details || {}).componentFailures) || [];
+              for (const f of [].concat(failures)) console.log('❌ ' + f.fullName + ': ' + f.problem);
+            " || true
+            echo "::error::Deploy failed (mode: $MODE, request: ${DEPLOY_ID:-n/a})" >&2
+            exit "$EXIT_CODE"
+          fi
+          echo "✅ Deploy succeeded"
+
+      - name: Export test results
+        if: always() && steps.deploy.outputs.deploy-id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy-id }}
+          ORG_ALIAS: ${{ vars.SF_ORG_ALIAS || inputs.environment }}
+        run: |
+          sf project deploy report \
+            --job-id "$DEPLOY_ID" \
+            --target-org "$ORG_ALIAS" \
+            --junit \
+            --results-dir test-results
+
+      # This artifact set is the audit record of the deployment: what was deployed
+      # (delta manifest), the deploy result, the tests that ran, and why quick
+      # deploy was or was not used.
+      - name: Upload deploy audit artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sf-deploy-${{ inputs.environment }}-${{ github.run_number }}
+          path: |
+            delta
+            deploy-result.json
+            quick-deploy-decision.json
+            validated/validation.json
+            test-results
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: warn
+
+      - name: Set GitHub Deployment status
+        if: always() && steps.create-deployment.outputs.deployment-id != ''
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          DEPLOYMENT_ID: ${{ steps.create-deployment.outputs.deployment-id }}
+          JOB_STATUS: ${{ job.status }}
+          INSTANCE_URL: ${{ steps.login.outputs.instance-url }}
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy-id }}
+        with:
+          script: |
+            const env = process.env;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let targetUrl = runUrl;
+            if (env.INSTANCE_URL && env.DEPLOY_ID) {
+              const address = encodeURIComponent(`/changemgmt/monitorDeploymentsDetails.apexp?asyncId=${env.DEPLOY_ID}`);
+              targetUrl = `${env.INSTANCE_URL}/lightning/setup/DeployStatus/page?address=${address}`;
+            }
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: Number(env.DEPLOYMENT_ID),
+              state: env.JOB_STATUS === 'success' ? 'success' : 'failure',
+              environment_url: env.INSTANCE_URL || undefined,
+              target_url: targetUrl,
+              log_url: runUrl,
+            });
+
+      - name: Logout
+        if: always()
+        shell: bash
+        env:
+          ORG_ALIAS: ${{ vars.SF_ORG_ALIAS || inputs.environment }}
+        run: |
+          sf org logout --target-org "$ORG_ALIAS" --no-prompt || true
