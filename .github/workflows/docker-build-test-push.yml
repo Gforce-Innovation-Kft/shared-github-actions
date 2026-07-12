@@ -1,0 +1,253 @@
+---
+# Reusable workflow: build → test → push for ONE Docker image.
+#
+# Callers fan out with a matrix (one invocation per image) and keep any
+# repo-specific release logic locally. The test stage expects the caller repo
+# to provide pytest-testinfra suites at tests/test_<image_name_with_underscores>.py
+# and a tests/requirements.txt.
+#
+# NOTE: this file's path is part of the cosign keyless certificate identity of
+# every image signed by it. Renaming or moving it invalidates all documented
+# `cosign verify` commands downstream.
+name: Docker Build/Test/Push (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: >-
+          Image name, e.g. sf-ci. Also selects tests/test_<name_with_underscores>.py.
+          Must be unique per caller run (artifact names derive from it).
+        required: true
+        type: string
+      context:
+        description: 'Docker build context path, e.g. ./sf-ci'
+        required: true
+        type: string
+      push:
+        description: 'Push the multi-platform image to Docker Hub (set true only on release tags)'
+        required: false
+        default: false
+        type: boolean
+      image-description:
+        description: >-
+          Docker Hub short description; when set, the README at <context>/README.md
+          is synced to Docker Hub after a successful push.
+        required: false
+        default: ''
+        type: string
+      dockerhub-username:
+        description: 'Docker Hub org/namespace'
+        required: false
+        default: 'gforceinnovation'
+        type: string
+      platforms:
+        description: 'Comma-separated platforms for the push stage'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+      python-version:
+        description: 'Python version for the test stage'
+        required: false
+        default: '3.x'
+        type: string
+      artifact-retention-days:
+        description: 'Retention for the intermediate image tar and version-report artifacts'
+        required: false
+        default: 1
+        type: number
+    secrets:
+      dockerhub-token:
+        description: 'Docker Hub access token (read/write; required only when push = true)'
+        required: false
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Build Docker image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5.4.0
+        with:
+          context: ${{ inputs.context }}
+          load: true
+          tags: ${{ inputs.image-name }}:test
+          cache-from: type=gha,scope=${{ inputs.image-name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}
+
+      - name: Report image size
+        run: |
+          SIZE=$(docker image inspect ${{ inputs.image-name }}:test --format='{{.Size}}')
+          echo "## ${{ inputs.image-name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image size: $(numfmt --to=iec-i --suffix=B "$SIZE")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export Docker image
+        run: docker save ${{ inputs.image-name }}:test | gzip > ${{ inputs.image-name }}.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: ${{ inputs.image-name }}-image
+          path: ${{ inputs.image-name }}.tar.gz
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Download image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: ${{ inputs.image-name }}-image
+
+      - name: Load Docker image
+        run: docker load < ${{ inputs.image-name }}.tar.gz
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install test dependencies
+        run: pip install -r tests/requirements.txt
+
+      - name: Run tests for ${{ inputs.image-name }}
+        run: |
+          IMAGE="${{ inputs.image-name }}"
+          TEST_FILE="test_${IMAGE//-/_}.py"
+          pytest "tests/${TEST_FILE}" -v --junitxml="test-results-${IMAGE}.xml"
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3  # v2.24.0
+        if: always()
+        with:
+          files: test-results-${{ inputs.image-name }}.xml
+          check_name: Test Results - ${{ inputs.image-name }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ inputs.image-name }}:test
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@02c5e83432fe5497fd85b873b6c9f16a8578e1d9  # v3.37.0
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  push:
+    name: push
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ inputs.push }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      # The single-arch tar is consumed by the version report below; the
+      # multi-arch push rebuilds from context (unavoidable for multi-platform).
+      - name: Download image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: ${{ inputs.image-name }}-image
+
+      - name: Load Docker image
+        run: docker load < ${{ inputs.image-name }}.tar.gz
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          username: ${{ inputs.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
+        with:
+          images: ${{ inputs.dockerhub-username }}/${{ inputs.image-name }}
+          # Two tags only: the exact release version (v1.2.3 -> 1.2.3) and latest.
+          # Rolling major/minor tags are deliberately not published.
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Push multi-platform image
+        id: push
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5.4.0
+        with:
+          context: ${{ inputs.context }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ inputs.image-name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}
+          sbom: true
+          provenance: true
+
+      # Requires a read/write Docker Hub token (read-only tokens cannot update
+      # repository descriptions).
+      - name: Sync README to Docker Hub
+        if: ${{ inputs.image-description != '' }}
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77  # v4.0.2
+        with:
+          username: ${{ inputs.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
+          repository: ${{ inputs.dockerhub-username }}/${{ inputs.image-name }}
+          short-description: ${{ inputs.image-description }}
+          readme-filepath: ${{ inputs.context }}/README.md
+
+      # Tool versions are read from the built image (source of truth, not the
+      # Dockerfile) and aggregated by the caller's release job.
+      - name: Build version report
+        run: |
+          IMG="${{ inputs.image-name }}:test"
+          run() { docker run --rm --entrypoint sh "$IMG" -c "$1"; }
+          OUT="version-report-${{ inputs.image-name }}.md"
+          {
+            echo "### \`${{ inputs.image-name }}\`"
+            echo
+            echo "| Component | Version |"
+            echo "| --- | --- |"
+            echo "| Node.js | $(run 'node -v') |"
+            echo "| npm | $(run 'npm -v') |"
+            echo "| Salesforce CLI | $(run 'sf version' | head -n1) |"
+            echo
+            echo "| Plugin | Version |"
+            echo "| --- | --- |"
+            # user = explicitly installed plugins only (core/jit would add ~40 rows)
+            run 'sf plugins --json' \
+              | jq -r '.[] | objects | select(.type == "user") | "| \(.name) | \(.version) |"'
+            echo
+          } > "$OUT"
+
+      - name: Upload version report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: version-report-${{ inputs.image-name }}
+          path: version-report-${{ inputs.image-name }}.md
+          retention-days: ${{ inputs.artifact-retention-days }}
