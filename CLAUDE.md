@@ -60,6 +60,20 @@ Authenticates to a Salesforce org via JWT bearer flow. Internally calls `get-aws
 **Outputs:** `org-id`, `username`
 **Expected AWS secret JSON fields:** `JWT_KEY_B64`, `USERNAME`, `CLIENT_ID`, `INSTANCE_URL`.
 
+### `sf-org-login` (`.github/actions/sf-org-login/action.yml`)
+
+Authenticates to a Salesforce org from an SFDX auth URL held in a GitHub secret (`sf org login sfdx-url`) — no cloud dependency. Cleans up the auth-URL file in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
+
+**Inputs:** `sfdx-auth-url` (required — always a secret), `org-alias` (default `target`), `set-default` (default `false`), `set-default-dev-hub` (default `false`)
+**Outputs:** `org-id`, `username`, `instance-url`
+
+### `sf-delta-package` (`.github/actions/sf-delta-package/action.yml`)
+
+Generates a delta `package.xml` between two git refs with sfdx-git-delta (installs the plugin on the fly when missing; preinstalled in `gforceinnovation/sf-ci`). Writes a component table to the step summary and `<output-dir>/components.md`. Requires a `fetch-depth: 0` checkout so both refs resolve.
+
+**Inputs:** `from-ref` (required), `to-ref` (default `HEAD`), `output-dir` (default `delta`), `source-dir` (default `force-app`), `generate-delta` (default `false`)
+**Outputs:** `package-path`, `has-changes`, `component-count`
+
 ## Reusable Workflows
 
 ### `salesforce-code-analyzer` (`.github/workflows/salesforce-code-analyzer.yml`)
@@ -78,6 +92,25 @@ Builds, tests, and pushes **one** Docker image per invocation (callers matrix ov
 **Caller permissions:** `contents: read`, `checks: write`, `pull-requests: write`, `security-events: write`, `id-token: write` (cosign keyless)
 **Caller repo contract:** pytest suites at `tests/test_<image_name_with_underscores>.py` + `tests/requirements.txt`.
 **Do not rename/move this file** — its path is the cosign certificate identity (`job_workflow_ref`); renaming invalidates all documented `cosign verify` commands.
+
+### `sf-validate` (`.github/workflows/sf-validate.yml`)
+
+Salesforce PR validation, designed as one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). Jobs: `validate` (delta package → check-only deploy with tests against the target org → `validation.json` quick-deploy handoff → `sf-validate-<run_number>` artifact, in a container), `analyze` (calls `salesforce-code-analyzer.yml` via same-repo relative ref, changed-files-only), `scratch-org` (optional: create/push/test/delete), `pr-comment` (sticky comment). Composite actions are referenced by absolute `@main` ref (they resolve against the caller's checkout — documented version-skew caveat).
+
+**Key inputs:** `container-image` (default `gforceinnovation/sf-ci:latest`), `test-level`/`test-classes`, `source-dir`, `scratch-org-validation` + `scratch-def-path`, `retention-days`, analyzer gates
+**Secrets:** `sfdx-auth-url` (required)
+**Outputs:** `has-changes`, `component-count`, `deploy-request-id`, `artifact-name`, analyzer violation counts
+**Caller permissions:** `contents: read`, `pull-requests: write`, `actions: read`
+
+### `sf-deploy` (`.github/workflows/sf-deploy.yml`)
+
+Gated Salesforce deploy bound to a caller GitHub Environment (`environment` input — reviewers/wait timers apply there). Creates a GitHub Deployment, then: quick deploy of the PR-validated request (looked up merge-commit → PR → head SHA → `sf-validate-*` artifact; valid only if org id + SHA match and <10 days old) → fallback delta deploy → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<environment>-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision) and sets the Deployment status with the Salesforce deploy-request URL.
+
+**Key inputs:** `environment` (required), `quick-deploy` (default `true`), `full-deploy` (default `false`), `test-level`/`test-classes`, `from-ref` (default `github.event.before`), `container-image`, `retention-days`
+**Secrets:** `sfdx-auth-url` (required)
+**Optional caller environment variable:** `SF_ORG_ALIAS` (defaults to the environment name)
+**Outputs:** `deploy-id`, `quick-deployed`, `org-id`, `username`, `artifact-name`
+**Caller permissions:** `contents: read`, `deployments: write`, `actions: read`
 
 ### `test-simple` (`.github/workflows/test-simple.yml`)
 

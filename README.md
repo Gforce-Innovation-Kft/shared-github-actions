@@ -48,12 +48,31 @@ title/body, labels, and reviewers.
   `contents: read`.
 - **`sf-jwt-login`** — authenticate to a Salesforce org via JWT bearer flow
   (wraps `get-aws-secret`, decodes the key, cleans up).
+- **`sf-org-login`** — authenticate to a Salesforce org from an SFDX auth URL
+  held in a GitHub secret (no cloud dependency). Outputs `org-id`, `username`,
+  `instance-url`; cleans up the auth file.
+- **`sf-delta-package`** — generate a delta `package.xml` between two git refs
+  with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
+  `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.
+  Requires a `fetch-depth: 0` checkout.
 
 ## Reusable Workflows
 
 - **`salesforce-code-analyzer.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
   `actions: read`.
+- **`sf-validate.yml`** — Salesforce PR validation: sfdx-git-delta package,
+  check-only deploy with tests against the target org (the quick-deploy
+  handle), Code Analyzer on changed files, optional scratch-org validation, a
+  sticky PR comment, and an `sf-validate-<run>` audit artifact. Secret:
+  `sfdx-auth-url`. Caller needs `contents: read`, `pull-requests: write`,
+  `actions: read`. See [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
+- **`sf-deploy.yml`** — gated Salesforce deploy bound to a caller GitHub
+  Environment: quick deploy of the PR-validated request (fallback: delta →
+  full), GitHub Deployment record linking the Salesforce deploy request, and an
+  `sf-deploy-<env>-<run>` audit artifact. Secret: `sfdx-auth-url`. Caller needs
+  `contents: read`, `deployments: write`, `actions: read`. See
+  [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
 - **`docker-build-test-push.yml`** — build → test → push for **one** Docker image
   (callers fan out with a matrix). Buildx build with per-image GHA cache scope,
   pytest-testinfra + Trivy SARIF test stage, multi-arch Docker Hub push with

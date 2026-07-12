@@ -2,6 +2,24 @@
 
 This directory contains example workflows showing how to use the shared GitHub Actions in different scenarios.
 
+## Salesforce CI/CD Pair
+
+### `sf-validate.yml`
+
+Caller-side PR validation: delta check-only deploy with tests, Code Analyzer on
+changed files, optional scratch-org validation, sticky PR comment, audit
+artifact. One repository secret (`DEVHUB_AUTH_URL`) is the only setup.
+
+### `sf-deploy.yml`
+
+Caller-side gated deploy on merge to main: the `production` GitHub Environment
+holds the required-reviewer gate, the PR-validated request is quick-deployed
+(fallback delta → full), every run records a GitHub Deployment plus an audit
+artifact. Includes the `workflow_dispatch` bootstrap path
+(`gh workflow run deploy.yml -f full-deploy=true`).
+
+Full setup guide: [docs/consuming-sf-cicd.md](../docs/consuming-sf-cicd.md).
+
 ## Salesforce Code Analyzer Examples
 
 ### Example 1: Basic PR Check
