@@ -33517,22 +33517,22 @@ function wrappy (fn, cb) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createReleasePrAction = void 0;
+exports.sfFindTestsAction = void 0;
 exports.run = run;
 const core_1 = __nccwpck_require__(9745);
 const github_actions_runtime_1 = __nccwpck_require__(3946);
 const inputReader_1 = __nccwpck_require__(4264);
 const outputWriter_1 = __nccwpck_require__(8629);
-/** The create-release-pr action wired from portable, shared pieces. */
-exports.createReleasePrAction = {
+/** The sf-find-tests action wired from portable, shared pieces. */
+exports.sfFindTestsAction = {
     readInputs: inputReader_1.readInputs,
-    validateInputs: core_1.validateCreateReleasePrInputs,
-    execute: core_1.runCreateReleasePrAction,
+    validateInputs: core_1.validateFindTestsInputs,
+    execute: core_1.runFindTestsAction,
     writeOutputs: outputWriter_1.writeOutputs,
 };
 /** Action entrypoint. `overrides` is for tests; production passes nothing. */
 function run(overrides) {
-    return (0, github_actions_runtime_1.runGitHubAction)(exports.createReleasePrAction, overrides);
+    return (0, github_actions_runtime_1.runGitHubAction)(exports.sfFindTestsAction, overrides);
 }
 /* istanbul ignore next -- runner-only entry guard; tests import and call run() directly */
 if (require.main === require.cache[eval('__filename')]) {
@@ -33586,15 +33586,9 @@ const core = __importStar(__nccwpck_require__(7930));
 /** Read raw inputs from the Action runtime. No validation happens here. */
 function readInputs() {
     return {
-        sourceBranch: core.getInput('source-branch'),
-        targetBranch: core.getInput('target-branch'),
-        releaseVersion: core.getInput('release-version'),
-        title: core.getInput('title'),
-        bodyTemplate: core.getInput('body-template'),
-        draft: core.getInput('draft'),
-        labels: core.getInput('labels'),
-        reviewers: core.getInput('reviewers'),
-        dryRun: core.getInput('dry-run'),
+        packageXml: core.getInput('package-xml'),
+        sourceDir: core.getInput('source-dir'),
+        testSuffixes: core.getInput('test-suffixes'),
         githubToken: core.getInput('github-token'),
     };
 }
@@ -33643,14 +33637,12 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.writeOutputs = writeOutputs;
 const core = __importStar(__nccwpck_require__(7930));
-/** Map the typed orchestration result onto kebab-case Action outputs. */
+/** Map the typed result onto kebab-case Action outputs. */
 function writeOutputs(result) {
-    core.setOutput('pull-request-number', result.pullRequestNumber != null ? String(result.pullRequestNumber) : '');
-    core.setOutput('pull-request-url', result.pullRequestUrl ?? '');
-    core.setOutput('created', String(result.created));
-    core.setOutput('updated', String(result.updated));
-    core.setOutput('dry-run', String(result.dryRun));
-    core.info(`create-release-pr: created=${result.created} updated=${result.updated} dryRun=${result.dryRun}`);
+    core.setOutput('tests', result.tests.join(' '));
+    core.setOutput('test-count', String(result.testCount));
+    core.setOutput('has-apex', String(result.hasApex));
+    core.info(`sf-find-tests: hasApex=${result.hasApex} selected=${result.testCount}`);
 }
 
 
