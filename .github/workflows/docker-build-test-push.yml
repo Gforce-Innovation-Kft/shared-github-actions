@@ -161,6 +161,10 @@ jobs:
     if: ${{ inputs.push }}
     permissions:
       contents: read
+      # cosign keyless signing: the OIDC token is exchanged for a short-lived
+      # Fulcio certificate whose identity is THIS workflow's job_workflow_ref.
+      # Callers must grant id-token: write on the calling job.
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -208,6 +212,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}
           sbom: true
           provenance: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+
+      # Keyless signature over the pushed manifest-list digest, recorded in the
+      # Rekor transparency log. Verify with:
+      #   cosign verify \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     --certificate-identity-regexp \
+      #       '^https://github\.com/Gforce-Innovation-Kft/shared-github-actions/\.github/workflows/docker-build-test-push\.yml@.+$' \
+      #     <namespace>/<image>:<tag>
+      - name: Sign image with cosign (keyless OIDC)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${{ inputs.dockerhub-username }}/${{ inputs.image-name }}@${DIGEST}"
 
       # Requires a read/write Docker Hub token (read-only tokens cannot update
       # repository descriptions).
