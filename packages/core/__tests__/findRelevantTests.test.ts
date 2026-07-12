@@ -146,6 +146,38 @@ describe('findRelevantTests', () => {
     expect(result.tests).toEqual(['LegacyFooTest']);
   });
 
+  it('selects tests that match both by naming and by reference', () => {
+    const manifest = `<Package><types><members>Invoice</members><name>ApexClass</name></types></Package>`;
+    const result = findRelevantTests(REQUEST, {
+      files: fakeReader(manifest, {
+        Invoice: 'public class Invoice {}',
+        InvoiceTest: '@IsTest class InvoiceTest { Invoice inv; new Invoice(); }',
+      }),
+      logger: NoopLogger,
+    });
+    expect(result.tests).toEqual(['InvoiceTest']);
+  });
+
+  it('matches against different suffix patterns', () => {
+    const manifest = `<Package><types><members>Service</members><name>ApexClass</name></types></Package>`;
+    const result = findRelevantTests(
+      {
+        packageXmlPath: 'delta/package/package.xml',
+        sourceDir: 'force-app',
+        testSuffixes: ['_Test', 'Tests'],
+      },
+      {
+        files: fakeReader(manifest, {
+          Service: 'public class Service {}',
+          Service_Test: '@IsTest class Service_Test {}',
+          ServiceTests: '@IsTest class ServiceTests {}',
+        }),
+        logger: NoopLogger,
+      },
+    );
+    expect(new Set(result.tests)).toEqual(new Set(['Service_Test', 'ServiceTests']));
+  });
+
   it('runFindTestsAction returns an error when reading the package fails', async () => {
     const context: ActionContext = { logger: NoopLogger };
     const input = {
