@@ -54,6 +54,19 @@ title/body, labels, and reviewers.
 - **`salesforce-code-analyzer.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
   `actions: read`.
+- **`docker-build-test-push.yml`** — build → test → push for **one** Docker image
+  (callers fan out with a matrix). Buildx build with per-image GHA cache scope,
+  pytest-testinfra + Trivy SARIF test stage, multi-arch Docker Hub push with
+  SBOM/provenance, **keyless cosign signing**, optional Docker Hub README sync,
+  and a `version-report-<image>` artifact (Node/npm/SF CLI/plugin versions read
+  from the built image) for release-note aggregation. Key inputs: `image-name`,
+  `context`, `push` (default `false`), `image-description`; secret:
+  `dockerhub-token` (only needed when `push: true`). Caller needs
+  `contents: read`, `checks: write`, `pull-requests: write`,
+  `security-events: write`, and `id-token: write` (cosign). Artifact names derive
+  from `image-name`, so it must be unique per caller run. Do **not** rename or
+  move the workflow file — its path is part of the cosign certificate identity,
+  and renaming breaks every documented `cosign verify` command.
 - **`test-simple.yml`** — minimal echo workflow for verifying cross-repo calls.
 
 ## Versioning

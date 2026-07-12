@@ -69,6 +69,16 @@ Runs Salesforce Code Analyzer (`forcedotcom/run-code-analyzer@v2`) with configur
 **Key inputs:** `workspace`, `fail-on-sev1-violations`, `fail-on-sev2-violations`, `max-violations`, `fail-on-changed-files-only`
 **Outputs:** `exit-code`, `num-violations`, `num-sev1-violations`, `num-sev2-violations`
 
+### `docker-build-test-push` (`.github/workflows/docker-build-test-push.yml`)
+
+Builds, tests, and pushes **one** Docker image per invocation (callers matrix over their images). Stages: buildx build (per-image GHA cache scope, image tar artifact) → pytest-testinfra + JUnit check + Trivy SARIF → multi-arch Docker Hub push with SBOM/provenance, keyless cosign signing (OIDC), optional Docker Hub README sync, and a `version-report-<image-name>` artifact for the caller's release job. Tag scheme: `{{version}}` + `latest` only. Designed for and consumed by `sf-docker-images`.
+
+**Key inputs:** `image-name` (unique per caller run — artifact names derive from it), `context`, `push` (default `false`; set from the caller's tag ref), `image-description` (enables README sync), `dockerhub-username`, `platforms`, `python-version`, `artifact-retention-days`
+**Secrets:** `dockerhub-token` (read/write; only consumed when `push: true`)
+**Caller permissions:** `contents: read`, `checks: write`, `pull-requests: write`, `security-events: write`, `id-token: write` (cosign keyless)
+**Caller repo contract:** pytest suites at `tests/test_<image_name_with_underscores>.py` + `tests/requirements.txt`.
+**Do not rename/move this file** — its path is the cosign certificate identity (`job_workflow_ref`); renaming invalidates all documented `cosign verify` commands.
+
 ### `test-simple` (`.github/workflows/test-simple.yml`)
 
 A minimal test workflow that echoes a message. Used for verifying cross-repo workflow calls work.
