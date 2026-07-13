@@ -1,4 +1,4 @@
-import { readInputs } from '../src/inputReader';
+import { readInputs } from '../../src/sf-find-tests/inputReader';
 
 describe('readInputs', () => {
   beforeEach(() => {

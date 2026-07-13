@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import { NoopLogger, type GitHubService } from '@gforce/core';
-import { run } from '../src/index';
+import { run } from '../src/sf-find-tests/index';
 
 describe('sf-find-tests integration', () => {
   const fixtures = join(__dirname, 'fixtures');
@@ -46,6 +46,20 @@ describe('sf-find-tests integration', () => {
   });
 
   it('ships a committed bundle', () => {
-    expect(existsSync(join(__dirname, '..', 'dist', 'index.js'))).toBe(true);
+    expect(
+      existsSync(
+        join(
+          __dirname,
+          '..',
+          '..',
+          '..',
+          '.github',
+          'actions',
+          'sf-find-tests',
+          'dist',
+          'index.js',
+        ),
+      ),
+    ).toBe(true);
   });
 });

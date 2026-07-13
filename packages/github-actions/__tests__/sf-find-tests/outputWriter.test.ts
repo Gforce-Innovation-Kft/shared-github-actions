@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { writeOutputs } from '../src/outputWriter';
+import { writeOutputs } from '../../src/sf-find-tests/outputWriter';
 
 describe('writeOutputs', () => {
   it('maps the result onto kebab-case outputs', () => {

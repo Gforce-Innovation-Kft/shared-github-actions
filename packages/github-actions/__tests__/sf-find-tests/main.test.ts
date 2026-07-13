@@ -1,8 +1,8 @@
 import { runFindTestsAction, validateFindTestsInputs } from '@gforce/core';
 import { runGitHubAction } from '@gforce/github-actions-runtime';
-import { sfFindTestsAction, run } from '../src/index';
-import { readInputs } from '../src/inputReader';
-import { writeOutputs } from '../src/outputWriter';
+import { sfFindTestsAction, run } from '../../src/sf-find-tests/index';
+import { readInputs } from '../../src/sf-find-tests/inputReader';
+import { writeOutputs } from '../../src/sf-find-tests/outputWriter';
 
 jest.mock('@gforce/github-actions-runtime', () => ({
   ...jest.requireActual('@gforce/github-actions-runtime'),

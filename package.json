@@ -10,8 +10,7 @@
   "workspaces": [
     "packages/core",
     "packages/github-actions-runtime",
-    "packages/github-actions",
-    ".github/actions/sf-find-tests"
+    "packages/github-actions"
   ],
   "scripts": {
     "format": "prettier --write \"**/*.{ts,mjs,cjs,js}\"",
