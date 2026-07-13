@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { readInputs } from '../src/inputReader';
+import { readInputs } from '../../src/create-release-pr/inputReader';
 
 jest.mock('@actions/core');
 

@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import type { CreateReleasePrResult } from '@gforce/core';
-import { writeOutputs } from '../src/outputWriter';
+import { writeOutputs } from '../../src/create-release-pr/outputWriter';
 
 jest.mock('@actions/core');
 

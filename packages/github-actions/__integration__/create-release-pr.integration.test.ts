@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import type { CompareResult, GitHubService, PullRequestSummary } from '@gforce/core';
-import { run } from '../src/index';
+import { run } from '../src/create-release-pr/index';
 
 jest.mock('@actions/core');
 
@@ -108,6 +108,20 @@ describe('create-release-pr (integration)', () => {
   });
 
   it('ships a committed bundle', () => {
-    expect(existsSync(join(__dirname, '..', 'dist', 'index.js'))).toBe(true);
+    expect(
+      existsSync(
+        join(
+          __dirname,
+          '..',
+          '..',
+          '..',
+          '.github',
+          'actions',
+          'create-release-pr',
+          'dist',
+          'index.js',
+        ),
+      ),
+    ).toBe(true);
   });
 });

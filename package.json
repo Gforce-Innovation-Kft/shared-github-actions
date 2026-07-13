@@ -11,7 +11,6 @@
     "packages/core",
     "packages/github-actions-runtime",
     "packages/github-actions",
-    ".github/actions/create-release-pr",
     ".github/actions/sf-find-tests"
   ],
   "scripts": {

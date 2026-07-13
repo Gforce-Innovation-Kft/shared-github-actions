@@ -1,8 +1,8 @@
 import { runGitHubAction } from '@gforce/github-actions-runtime';
 import { runCreateReleasePrAction, validateCreateReleasePrInputs } from '@gforce/core';
-import { run, createReleasePrAction } from '../src/index';
-import { readInputs } from '../src/inputReader';
-import { writeOutputs } from '../src/outputWriter';
+import { run, createReleasePrAction } from '../../src/create-release-pr/index';
+import { readInputs } from '../../src/create-release-pr/inputReader';
+import { writeOutputs } from '../../src/create-release-pr/outputWriter';
 
 jest.mock('@gforce/github-actions-runtime');
 
