@@ -23,7 +23,8 @@ portable and free of any runner API.
 |------|------|
 | `packages/core` | Portable business logic: use cases (`actions/*`), GitHub services (`github-service/*`), validation, result/errors. No `@actions/*`. |
 | `packages/github-actions-runtime` | `@actions/core` adapter: `ActionsLogger`, `readRepoFromEnvironment`, the `runGitHubAction` loop. |
-| `.github/actions/<name>` | Thin adapter: `index.ts` (definition + guarded `run()`), `inputReader.ts`, `outputWriter.ts`, committed `dist/index.js`. |
+| `packages/github-actions` | All action adapters (`src/<name>/index.ts`, `inputReader.ts`, `outputWriter.ts`) + their unit/integration tests. |
+| `.github/actions/<name>` | Thin manifest: `action.yml` + committed `dist/index.js`. |
 
 GitHub API calls are wrapped once per domain service (`BranchService`,
 `PullRequestService`) behind the composed `GitHubService` facade; each service is

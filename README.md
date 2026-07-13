@@ -126,7 +126,8 @@ npm-workspaces monorepo:
 ```text
 packages/core                      # portable business logic + GitHub services (no @actions/*)
 packages/github-actions-runtime    # @actions/core adapter: logger, repo-from-env, runGitHubAction
-.github/actions/<name>             # thin TypeScript action adapters (committed dist/)
+packages/github-actions            # ALL thin action adapters + their tests (one folder per action)
+.github/actions/<name>             # action.yml + committed dist/index.js ONLY (built from packages/)
 .github/actions/get-aws-secret     # composite actions
 .github/workflows                  # CI + reusable workflows
 examples/                          # runnable caller workflows

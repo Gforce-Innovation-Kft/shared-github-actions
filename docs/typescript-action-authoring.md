@@ -22,31 +22,31 @@ collaborators and hands them to `runGitHubAction`. See
    "Extending a GitHub service domain" below). Export everything from
    `packages/core/src/index.ts`. Add core unit tests.
 
-2. **Scaffold the action** under `.github/actions/<name>/`:
-   - `package.json` — name `@gforce/<name>`, deps `@actions/core`,
-     `@gforce/core: "*"`, `@gforce/github-actions-runtime: "*"` (no direct
-     `@octokit/rest`); scripts `typecheck` / `test` / `bundle` (copy an existing action).
-   - `action.yml` — `using: node20`, `main: dist/index.js`, kebab-case inputs/outputs.
-   - `tsconfig.json` — `extends ../../../tsconfig.base.json`, `noEmit`.
-   - `jest.config.js` — copy an existing action (maps `@gforce/core` **and**
-     `@gforce/github-actions-runtime` to source, per-package 90% threshold).
-   - `src/` — three template files (`index`, `inputReader`, `outputWriter`).
+2. **Add the adapter to `packages/github-actions`**:
+   - `src/<name>/` — three template files (`index`, `inputReader`, `outputWriter`).
      `index.ts` builds the `GitHubActionDefinition`, exposes `run(overrides?)`
      (which calls `runGitHubAction`), and self-invokes under a
      `require.main === module` guard so importing it in tests doesn't run it.
+   - Add a `bundle:<name>` script to `packages/github-actions/package.json`
+     (`ncc build src/<name>/index.ts -o ../../.github/actions/<name>/dist`) and
+     chain it into the package's `bundle` script.
+   - `.github/actions/<name>/action.yml` — `using: node20`, `main: dist/index.js`,
+     kebab-case inputs/outputs. This is the ONLY hand-written file in the runner
+     folder; everything else there is the committed ncc bundle.
 
-3. **Register the workspace.** Add `.github/actions/<name>` to the root
-   `package.json` `workspaces` array (it is an explicit list — composite actions
-   have no `package.json`, so we don't glob `.github/actions/*`). Run `npm install`.
+3. **No workspace registration needed** — `packages/github-actions` is already
+   a workspace; new actions are just folders inside it.
 
-4. **Tests** (`__tests__/` + `__integration__/`): `inputReader`, `outputWriter`,
-   and a `main` test asserting the definition is wired from the shared pieces and
-   that `run()` delegates to `runGitHubAction`. The integration test drives `run()`
-   end-to-end with a fake service injected as a context override and asserts
-   `dist/index.js` exists. (Validators, the run seam, the logger, repo parsing,
-   and `runGitHubAction` are tested in core / the runtime package.)
+4. **Tests** (`packages/github-actions/__tests__/<name>/` +
+   `packages/github-actions/__integration__/<name>.integration.test.ts`):
+   `inputReader`, `outputWriter`, and a `main` test asserting the definition is
+   wired from the shared pieces and that `run()` delegates to `runGitHubAction`.
+   The integration test drives `run()` end-to-end with a fake service injected
+   as a context override and asserts `dist/index.js` exists. (Validators, the
+   run seam, the logger, repo parsing, and `runGitHubAction` are tested in
+   core / the runtime package.)
 
-5. **Bundle, then validate.** `npm run bundle -w @gforce/<name>` then
+5. **Bundle, then validate.** `npm run bundle -w @gforce/github-actions` then
    `npm run all`. Commit `dist/index.js` (the pre-commit hook keeps it in sync).
 
 6. **Document.** Add an example caller to `examples/<name>.yml` and a row to the
@@ -59,7 +59,7 @@ The adapter is always these three files. Only the names and the four collaborato
 change between actions.
 
 ```text
-.github/actions/<name>/src/
+packages/github-actions/src/<name>/
   index.ts        # definition + run() + require.main guard (below)
   inputReader.ts  # core.getInput(...) -> Raw*Inputs  (type imported from @gforce/core)
   outputWriter.ts # result -> core.setOutput(...)     (kebab-case keys)
@@ -146,8 +146,8 @@ github-service/<domain>/
 ## Local commands
 
 ```bash
-npm install              # link workspaces + install husky
-npm run all              # format:check + lint + typecheck + bundle + test + dist:verify
-npm run test -w @gforce/<name>      # one package's tests + coverage
-npm run bundle -w @gforce/<name>    # rebuild one action's dist/index.js
+npm install                          # link workspaces + install husky
+npm run all                          # format:check + lint + typecheck + bundle + test + dist:verify
+npm run test -w @gforce/github-actions      # all adapters' tests + coverage
+npm run bundle -w @gforce/github-actions    # rebuild every action's dist/index.js
 ```
