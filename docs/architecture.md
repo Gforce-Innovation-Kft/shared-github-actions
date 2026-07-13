@@ -8,8 +8,8 @@ them together for the runner.
 ```
 packages/core                      # portable business logic + GitHub service (no @actions/*)
 packages/github-actions-runtime    # @actions/core adapter: logger, repo-from-env, runGitHubAction
-.github/actions/sync-branches      # thin adapter -> @gforce/core + @gforce/github-actions-runtime
-.github/actions/create-release-pr  # thin adapter -> @gforce/core + @gforce/github-actions-runtime
+packages/github-actions            # ALL thin action adapters + their tests (one folder per action)
+.github/actions/<name>             # action.yml + committed dist/index.js ONLY (built from packages/)
 ```
 
 ## Layers and the dependency rule
@@ -82,16 +82,21 @@ rest). The adapter turns an `err` into `core.setFailed`.
 Each action adapter is reduced to four runtime-bound pieces; everything reusable
 (validation, input/output types, validated->request mapping, repo parsing,
 service composition, the run loop) lives in `@gforce/core` or
-`@gforce/github-actions-runtime`:
+`@gforce/github-actions-runtime`. All adapters live together in the
+`@gforce/github-actions` workspace, one folder per action:
 
 ```
-src/
+packages/github-actions/src/<name>/
   index.ts        # ncc entry: builds the GitHubActionDefinition, run(), and a
                   #   `require.main === module` guard that calls run() only when
                   #   executed as the action (not when imported by tests)
   inputReader.ts  # @actions/core getInput -> Raw*Inputs (type from core)
   outputWriter.ts # result -> core.setOutput (kebab-case)
 ```
+
+The runner folder, `.github/actions/<name>`, contains only `action.yml` and the
+committed `dist/index.js`; ncc bundles out of `packages/github-actions` into
+that folder, so nothing else in `.github/actions/<name>` is hand-written.
 
 `index.ts` is declarative — it names the four collaborators and delegates the loop:
 
@@ -121,26 +126,33 @@ keeps the whole pipeline runner-free in tests.
   is no build ordering between core and the actions — ts-jest, `tsc`, and ncc
   all read the latest source. A jest `moduleNameMapper` mirrors this for tests.
 - **Each action bundles to a committed `dist/index.js`** via `@vercel/ncc`
-  (self-contained: core + octokit inlined). GitHub runs `dist/index.js`, so it
-  **must** be committed and current. `.gitignore` ignores `packages/*/dist` but
-  keeps `.github/actions/*/dist`. The pre-commit hook rebuilds and re-stages the
-  bundle; CI's `dist:verify` (`git diff --exit-code`) fails on a stale bundle.
+  (self-contained: core + octokit inlined). `@gforce/github-actions` owns one
+  `bundle:<name>` script per action (`ncc build src/<name>/index.ts -o
+  ../../.github/actions/<name>/dist`), chained into its `bundle` script. GitHub
+  runs `dist/index.js`, so it **must** be committed and current. `.gitignore`
+  ignores `packages/*/dist` but keeps `.github/actions/*/dist`. The pre-commit
+  hook rebuilds and re-stages the bundle; CI's `dist:verify` — a `git diff
+  --exit-code` glob over `.github/actions/*/dist` (every bundled action) —
+  fails on a stale bundle.
 
 ## Testing and coverage
 
 - **Per-package** 90% threshold (branches/functions/lines/statements) — weak
-  action or runtime coverage can't hide behind a global number. The actions and
-  the runtime package report 100% across the board; core reports 100%
-  statements/functions/lines.
+  core or runtime coverage can't hide behind a single repo-wide number.
+  `@gforce/github-actions` has one jest config and one 90% gate spanning all
+  three adapters (100% today); the runtime package reports 100% across the
+  board; core reports 100% statements/functions/lines.
 - Coverage requires `sourceMap: true` in `tsconfig.base.json`: with
   `isolatedModules`, ts-jest injects helper code (e.g. `__importStar` for
   `import * as core`) at the top of the emitted JS. Without source maps istanbul
   reports the **emitted** line numbers and mis-maps coverage. Source maps map it
   back to the original `.ts`.
-- All tests mock GitHub — no network, no runner. `__integration__/` drives each
-  action end-to-end through `run()` (real read/validate/execute/write via
-  `runGitHubAction`) against an in-memory fake service injected as a context
-  override, and asserts the committed bundle exists.
+- All tests mock GitHub — no network, no runner. Unit tests live in
+  `packages/github-actions/__tests__/<name>/`; each action also gets an
+  end-to-end test at `packages/github-actions/__integration__/<name>.integration.test.ts`,
+  driving `run()` (real read/validate/execute/write via `runGitHubAction`)
+  against an in-memory fake service injected as a context override, and
+  asserting the committed bundle exists.
 
 ## Future-work stubs
 
