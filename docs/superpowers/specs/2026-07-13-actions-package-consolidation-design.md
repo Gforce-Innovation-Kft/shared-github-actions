@@ -1,4 +1,4 @@
-  app# Design: Consolidate TypeScript action adapters into `packages/github-actions`
+# Design: Consolidate TypeScript action adapters into `packages/github-actions`
 
 **Date:** 2026-07-13
 **Status:** Approved
