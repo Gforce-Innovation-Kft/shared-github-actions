@@ -7,9 +7,10 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --coverage --config jest.config.js",
-    "bundle": "npm run bundle:sync-branches && npm run bundle:create-release-pr",
+    "bundle": "npm run bundle:sync-branches && npm run bundle:create-release-pr && npm run bundle:sf-find-tests",
     "bundle:sync-branches": "ncc build src/sync-branches/index.ts -o ../../.github/actions/sync-branches/dist",
-    "bundle:create-release-pr": "ncc build src/create-release-pr/index.ts -o ../../.github/actions/create-release-pr/dist"
+    "bundle:create-release-pr": "ncc build src/create-release-pr/index.ts -o ../../.github/actions/create-release-pr/dist",
+    "bundle:sf-find-tests": "ncc build src/sf-find-tests/index.ts -o ../../.github/actions/sf-find-tests/dist"
   },
   "dependencies": {
     "@actions/core": "^1.10.1",
