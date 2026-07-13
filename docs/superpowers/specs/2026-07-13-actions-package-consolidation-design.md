@@ -1,4 +1,4 @@
-  # Design: Consolidate TypeScript action adapters into `packages/github-actions`
+  app# Design: Consolidate TypeScript action adapters into `packages/github-actions`
 
 **Date:** 2026-07-13
 **Status:** Approved
@@ -96,9 +96,14 @@ from its committed `dist/` via `uses: ./.github/actions/<name>`:
 
 | Action | Smoke inputs | Network |
 |--------|--------------|---------|
-| `sf-find-tests` | committed fixtures (`package-xml`, `source-dir`) | none |
-| `sync-branches` | `dry-run: true`, `source-branch: main`, `target-branch: main`, `github.token` | read-only API ("already in sync" path) |
-| `create-release-pr` | `dry-run: true`, `github.token` | read-only API (dry-run skips creation) |
+| `sf-find-tests` | committed fixtures (`package-xml`, `source-dir`); every event | none |
+| `sync-branches` | `dry-run: true`, `source-branch: ${{ github.head_ref }}`, `target-branch: ${{ github.base_ref }}`, `github.token`; `pull_request` events only | read-only API |
+| `create-release-pr` | `dry-run: true`, PR head/base refs, `release-version: v0.0.0-smoke`, `github.token`; `pull_request` events only | read-only API (dry-run never creates/updates) |
+
+Note: both `sync-branches` and `create-release-pr` reject `source == target` in input
+validation, so a main→main smoke is impossible by design; the PR's own refs are the
+natural read-only inputs, which is why those two smoke steps run on `pull_request`
+events only.
 
 Each smoke step asserts the action's declared outputs are set. This verifies what
 unit tests cannot: `action.yml` input wiring, the committed bundle actually
