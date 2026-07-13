@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["packages/*/src", ".github/actions/*/src"]
+  "include": ["packages/*/src"]
 }

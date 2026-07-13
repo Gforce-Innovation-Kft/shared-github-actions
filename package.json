@@ -21,7 +21,7 @@
     "build:all": "npm run typecheck:all",
     "test:all": "npm run test --workspaces --if-present",
     "bundle:all": "npm run bundle --workspaces --if-present",
-    "dist:verify": "git diff --exit-code -- .github/actions/sync-branches/dist .github/actions/create-release-pr/dist",
+    "dist:verify": "git diff --exit-code -- ':(glob).github/actions/*/dist/**'",
     "all": "npm run format:check && npm run lint && npm run typecheck:all && npm run bundle:all && npm run test:all && npm run dist:verify",
     "prepare": "husky"
   },
