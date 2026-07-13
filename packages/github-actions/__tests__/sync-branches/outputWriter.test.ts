@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import type { SyncBranchesResult } from '@gforce/core';
-import { writeOutputs } from '../src/outputWriter';
+import { writeOutputs } from '../../src/sync-branches/outputWriter';
 
 jest.mock('@actions/core');
 

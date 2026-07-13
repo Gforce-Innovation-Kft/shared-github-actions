@@ -1,8 +1,8 @@
 import { runGitHubAction } from '@gforce/github-actions-runtime';
 import { runSyncBranchesAction, validateSyncBranchesInputs } from '@gforce/core';
-import { run, syncBranchesAction } from '../src/index';
-import { readInputs } from '../src/inputReader';
-import { writeOutputs } from '../src/outputWriter';
+import { run, syncBranchesAction } from '../../src/sync-branches/index';
+import { readInputs } from '../../src/sync-branches/inputReader';
+import { writeOutputs } from '../../src/sync-branches/outputWriter';
 
 jest.mock('@gforce/github-actions-runtime');
 

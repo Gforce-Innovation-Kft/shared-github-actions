@@ -7,9 +7,8 @@ module.exports = {
     '^.+\\.ts$': 'ts-jest',
   },
   moduleNameMapper: {
-    '^@gforce/core$': '<rootDir>/../../../packages/core/src/index.ts',
-    '^@gforce/github-actions-runtime$':
-      '<rootDir>/../../../packages/github-actions-runtime/src/index.ts',
+    '^@gforce/core$': '<rootDir>/../core/src/index.ts',
+    '^@gforce/github-actions-runtime$': '<rootDir>/../github-actions-runtime/src/index.ts',
   },
   moduleFileExtensions: ['ts', 'js', 'json'],
   collectCoverage: true,
