@@ -100,6 +100,8 @@ from its committed `dist/` via `uses: ./.github/actions/<name>`:
 | `sync-branches` | `dry-run: true`, `source-branch: ${{ github.head_ref }}`, `target-branch: ${{ github.base_ref }}`, `github.token`; `pull_request` events only | read-only API |
 | `create-release-pr` | `dry-run: true`, PR head/base refs, `release-version: v0.0.0-smoke`, `github.token`; `pull_request` events only | read-only API (dry-run never creates/updates) |
 
+The smoke job carries job-level `permissions: contents: read` + `pull-requests: read` — the create-release-pr dry run lists open PRs before short-circuiting, and the workflow-level `contents: read` block would otherwise zero out `pull-requests`.
+
 Note: both `sync-branches` and `create-release-pr` reject `source == target` in input
 validation, so a main→main smoke is impossible by design; the PR's own refs are the
 natural read-only inputs, which is why those two smoke steps run on `pull_request`
