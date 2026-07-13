@@ -10,7 +10,7 @@
   "workspaces": [
     "packages/core",
     "packages/github-actions-runtime",
-    ".github/actions/sync-branches",
+    "packages/github-actions",
     ".github/actions/create-release-pr",
     ".github/actions/sf-find-tests"
   ],
