@@ -26,5 +26,15 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The strict-architecture tree (and the action entry points bundled from it)
+    // enforces the spec rules as errors.
+    files: ['gforce-gha-src/**/*.ts', '.github/actions/*/index.ts'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': ['error', { allowExpressions: true }],
+      '@typescript-eslint/no-non-null-assertion': 'error',
+      'no-console': 'error',
+    },
+  },
   prettier,
 );

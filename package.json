@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "workspaces": [
+    "gforce-gha-src",
     "packages/core",
     "packages/github-actions-runtime",
     "packages/github-actions"
@@ -30,6 +31,7 @@
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.15",
     "@vercel/ncc": "^0.38.1",
+    "esbuild": "^0.23.1",
     "eslint": "^9.9.0",
     "eslint-config-prettier": "^9.1.0",
     "husky": "^9.1.5",

@@ -1,0 +1,43 @@
+/** Branch comparison and merge value objects for {@link GitHubBranchesClient}. */
+
+export interface CommitSummary {
+  readonly sha: string;
+  readonly message: string;
+  readonly author?: string;
+}
+
+export type ChangeStatus =
+  | 'added'
+  | 'removed'
+  | 'modified'
+  | 'renamed'
+  | 'copied'
+  | 'changed'
+  | 'unchanged';
+
+export interface ChangedFile {
+  readonly filename: string;
+  readonly status: ChangeStatus;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/** GitHub's `compare` status between a base and head ref. */
+export type CompareStatus = 'diverged' | 'ahead' | 'behind' | 'identical';
+
+export interface BranchComparison {
+  readonly status: CompareStatus;
+  /** Commits the head ref has that the base ref does not. */
+  readonly aheadBy: number;
+  /** Commits the base ref has that the head ref does not. */
+  readonly behindBy: number;
+  readonly totalCommits: number;
+  readonly commits: readonly CommitSummary[];
+  readonly files: readonly ChangedFile[];
+}
+
+/** Outcome of attempting a server-side merge of one branch into another. */
+export type MergeOutcome =
+  | { readonly status: 'merged'; readonly sha: string }
+  | { readonly status: 'nothing' }
+  | { readonly status: 'conflict' };
