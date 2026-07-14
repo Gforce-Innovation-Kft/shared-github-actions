@@ -1,5 +1,59 @@
 import { ValidationError } from '../../utils/errors';
-import { parseBoolean, parseEnum, parseList, requireNonEmpty } from '../../utils/validation';
+import {
+  parseBoolean,
+  parseEnum,
+  parseList,
+  readStringInput,
+  requireNonEmpty,
+} from '../../utils/validation';
+
+describe('readStringInput', () => {
+  test('readStringInput_presentStringValue_returnsValue', () => {
+    // Given
+    const rawInputs = { 'source-branch': 'develop' };
+
+    // When
+    const value = readStringInput(rawInputs, 'source-branch');
+
+    // Then
+    expect(value).toBe('develop');
+  });
+
+  test('readStringInput_absentKey_returnsUndefined', () => {
+    // Given
+    const rawInputs = {};
+
+    // When
+    const value = readStringInput(rawInputs, 'source-branch');
+
+    // Then
+    expect(value).toBeUndefined();
+  });
+
+  test('readStringInput_nonStringValue_throwsValidationError', () => {
+    // Given
+    const rawInputs = { 'dry-run': true };
+
+    // When
+    const act = (): unknown => readStringInput(rawInputs, 'dry-run');
+
+    // Then
+    expect(act).toThrow(ValidationError);
+    expect(act).toThrow('Input "dry-run" must be a string');
+  });
+
+  test('readStringInput_nonObjectPayload_throwsValidationError', () => {
+    // Given
+    const rawInputs = 42;
+
+    // When
+    const act = (): unknown => readStringInput(rawInputs, 'dry-run');
+
+    // Then
+    expect(act).toThrow(ValidationError);
+    expect(act).toThrow('Expected raw inputs to be an object');
+  });
+});
 
 describe('requireNonEmpty', () => {
   test('requireNonEmpty_paddedValue_returnsTrimmed', () => {

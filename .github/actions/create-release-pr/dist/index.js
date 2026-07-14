@@ -26893,7 +26893,8 @@ var DEFAULT_BODY_TEMPLATE = [
   ""
 ].join("\n");
 function firstLine(message) {
-  return message.split("\n")[0] ?? "";
+  const newlineIndex = message.indexOf("\n");
+  return newlineIndex === -1 ? message : message.slice(0, newlineIndex);
 }
 var ReleasePrService = class _ReleasePrService {
   static instance;

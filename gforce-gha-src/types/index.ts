@@ -71,3 +71,16 @@ export interface CreateReleasePrResult {
   readonly title: string;
   readonly body: string;
 }
+
+// sf-find-tests
+
+/**
+ * Normalized, validated sf-find-tests inputs. `githubToken` is required by the
+ * action interface for parity, but the selection makes no GitHub API calls.
+ */
+export interface ValidatedSfFindTestsInputs {
+  readonly packageXml: string;
+  readonly sourceDir: string;
+  readonly testSuffixes: readonly string[];
+  readonly githubToken: string;
+}

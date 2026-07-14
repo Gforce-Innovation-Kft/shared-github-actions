@@ -48,20 +48,3 @@ export type { SfdxService } from './sfdx-service/sfdxService';
 
 // Shared action collaborators
 export type { ActionContext } from './actions/types';
-
-// find-relevant-tests use case + action seam
-export {
-  findRelevantTests,
-  parseApexMembers,
-  runFindTestsAction,
-} from './actions/findRelevantTests/findRelevantTests';
-export { validateFindTestsInputs } from './actions/findRelevantTests/validateFindTestsInputs';
-export { createNodeSourceFileReader } from './actions/findRelevantTests/nodeSourceFileReader';
-export type {
-  FindTestsRequest,
-  FindTestsResult,
-  FindTestsDeps,
-  SourceFileReader,
-  RawFindTestsInputs,
-  ValidatedFindTestsInputs,
-} from './actions/findRelevantTests/types';
