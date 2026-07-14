@@ -1,161 +1,118 @@
 # Architecture
 
-This repo is an npm-workspaces monorepo with three layers: a portable,
-GitHub-Actions-agnostic TypeScript **core**, a small **runtime** package that
-owns everything `@actions/*`-specific, and the thin **action adapters** that wire
-them together for the runner.
+The TypeScript actions follow a strict, class-based, singleton, MVC-style
+architecture. All implementation lives in **`gforce-gha-src/`** (the single
+source of truth); the only `.ts` file outside it is each action's entry point.
+The full design record is
+[docs/superpowers/specs/2026-07-14-strict-singleton-actions-architecture-design.md](superpowers/specs/2026-07-14-strict-singleton-actions-architecture-design.md).
 
-```
-packages/core                      # portable business logic + GitHub service (no @actions/*)
-packages/github-actions-runtime    # @actions/core adapter: logger, repo-from-env, runGitHubAction
-packages/github-actions            # ALL thin action adapters + their tests (one folder per action)
-.github/actions/<name>             # action.yml + committed dist/index.js ONLY (built from packages/)
-```
+```text
+.github/actions/
+  package.json                 # build:all orchestration (NOT a nested workspace root)
+  tsconfig.json                # shared strict TS config for action entries
+  jest.config.js               # shared Jest config for entry packages (--passWithNoTests)
+  <action-name>/
+    action.yml                 # inputs, outputs, permissions notes, runs
+    index.ts                   # entry ONLY: getInput -> Orchestrator.execute -> setOutput/setFailed
+    package.json               # @gforce/<action-name>: esbuild build, file: dep on gforce-gha-src
+    dist/index.js              # committed esbuild bundle (GitHub runs this)
 
-## Layers and the dependency rule
-
-```
-action adapter  ->  @gforce/github-actions-runtime (@actions/core, env)  ->  @gforce/core (use cases, services, utils)
-                \------------------------------------------------------>  @gforce/core
-```
-
-The rule, enforced by direction: **`packages/core` never imports `@actions/core`
-or any runner API.** It may depend on `@octokit/rest` (a portable npm library).
-Everything runtime-specific — reading the repo from `GITHUB_REPOSITORY`, logging
-to the Actions UI, the top-level read/validate/execute/fail loop — lives in
-`@gforce/github-actions-runtime`. Logging crosses the boundary through the
-`Logger` port; the runtime supplies an `@actions/core`-backed implementation.
-Pure helpers that the runtime needs (e.g. `parseRepoRef('owner/repo')`) stay in
-core; only the environment access (`process.env.GITHUB_REPOSITORY`) lives in the
-runtime.
-
-## Per-domain services + one wrapper per API operation
-
-Every external GitHub call is wrapped **exactly once** as a typed method on a
-per-domain service **port**, implemented **only** by its `Octokit*Service` (the
-only modules that touch `@octokit/rest`). Each domain colocates its **port +
-implementation in one file** (`<domain>Service.ts`), next to its `types.ts`:
-
-| Module / file                        | Port + impl (same file)                  | Wrapper(s)                                                     |
-| ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------- |
-| `branch/branchService.ts`            | `BranchService` + `OctokitBranchService` | `compareBranches`, `getBranchHeadSha`, `updateBranchRef`, `mergeBranches` (maps `409` -> `conflict`) |
-| `pull-request/pullRequestService.ts` | `PullRequestService` + `OctokitPullRequestService` | `listOpenPullRequests`, `createPullRequest`, `updatePullRequest`, `addLabels`, `requestReviewers` |
-| `action/actionsService.ts`           | `ActionsService` (stub, no impl yet)     | `dispatchWorkflow` (reserved)                                  |
-
-`github/gitHubService.ts` holds the **facade** `GitHubService extends
-BranchService, PullRequestService` **and** the `OctokitGitHubService` that
-composes the per-domain services, delegating each method. Use cases
-(`syncBranches`, `createReleasePr`) and adapters depend on the facade, never a raw
-client, so the same wrapper is reused across actions. A new action is assembled
-from existing wrappers; a new domain adds one `<domain>Service.ts` (port + impl)
-and folds into the facade.
-
-### Singletons (static instance methods) + one shared client
-
-Each service owns its own lifecycle through the same static trio
-(`getInstance(token)` cached / `newInstance(token)` isolated / `resetInstance()`
-test-only); `getInstance` throws on a token mismatch rather than acting under the
-wrong identity. To keep a **single rate-limit budget**, the one authenticated
-`Octokit` is owned by a `client/GitHubClient` singleton:
-
-- `GitHubClient.getInstance(token)` builds the client once; every
-  `Octokit*Service.getInstance(token)` wraps that same client.
-- `OctokitGitHubService.getInstance(token)` composes the branch + PR singletons,
-  so one client backs the whole facade.
-- `*.newInstance(token)` builds an isolated client (the facade's `newInstance`
-  shares one fresh client across its sub-services).
-
-Every constructor stays injectable (`new OctokitBranchService(octokit)`,
-`new OctokitGitHubService(branch, pulls)`), so tests pass fakes. The runtime's
-`runGitHubAction` calls `OctokitGitHubService.getInstance` when no service
-override is supplied.
-
-## Result and errors
-
-Use cases return `Result<T, AppError>` (`ok` / `err`) rather than throwing across
-the boundary. The `Octokit*Service`s wrap API failures in `GitHubApiError` (via
-the shared `client/octokitSupport` helper; `ValidationError`/`AppError` for the
-rest). The adapter turns an `err` into `core.setFailed`.
-
-## The adapter template
-
-Each action adapter is reduced to four runtime-bound pieces; everything reusable
-(validation, input/output types, validated->request mapping, repo parsing,
-service composition, the run loop) lives in `@gforce/core` or
-`@gforce/github-actions-runtime`. All adapters live together in the
-`@gforce/github-actions` workspace, one folder per action:
-
-```
-packages/github-actions/src/<name>/
-  index.ts        # ncc entry: builds the GitHubActionDefinition, run(), and a
-                  #   `require.main === module` guard that calls run() only when
-                  #   executed as the action (not when imported by tests)
-  inputReader.ts  # @actions/core getInput -> Raw*Inputs (type from core)
-  outputWriter.ts # result -> core.setOutput (kebab-case)
+gforce-gha-src/
+  actions/<action-name>/       # per-action controllers
+    orchestrator.ts            # Orchestrator singleton — execute() as numbered delegated steps
+    validator.ts               # Validator singleton — inputValidation()
+  clients/github/              # one sub-client per API domain, thin wrappers only
+    core/github-client-core.ts # createOctokit + shared-Octokit cache + error mapping (NOT a singleton)
+    repos/                     # GitHubBranchesClient + types (BranchComparison, MergeOutcome, ...)
+    pull-requests/             # GitHubPullRequestsClient + types
+    github-client.ts           # GitHubClient facade — the only client services touch
+    index.ts                   # barrel
+  libraries/salesforce/        # external-system logic (services/, selectors/, models/, utils/)
+  services/                    # generic singleton services shared across actions
+  types/index.ts               # shared DTOs (validated inputs, results, RepoRef)
+  utils/                       # pure stateless helpers (errors, validation, parse-repo-ref)
+  __tests__/                   # mirrors the source tree + __tests__/integration/
 ```
 
-The runner folder, `.github/actions/<name>`, contains only `action.yml` and the
-committed `dist/index.js`; ncc bundles out of `packages/github-actions` into
-that folder, so nothing else in `.github/actions/<name>` is hand-written.
+## Layer rules
 
-`index.ts` is declarative — it names the four collaborators and delegates the loop:
+| Layer | Allowed | Not allowed |
+| --- | --- | --- |
+| `index.ts` (entry) | `core.getInput`, `core.setOutput`, `core.setFailed`, one `Orchestrator.getInstance().execute()` call | Business logic, direct service calls, validation |
+| Orchestrator | Call Validator, services, simple sequencing | Business rules, transformations, API calls, file I/O |
+| Validator | Type/required/format checks, sanitization | External calls, business logic |
+| Service | Multi-step workflows, calls to clients, business rules | Direct `octokit.*` calls, `core.getInput`/`setOutput` |
+| Client | Wrap one external API (one method per endpoint), own error mapping | Business logic, workflow decisions, logging |
+| Selector | Pure read/filter/transform | State mutation, external calls |
+| Utils | Pure stateless helpers | State, external calls |
 
-```ts
-export const syncBranchesAction = {
-  readInputs,                              // local: @actions/core getInput
-  validateInputs: validateSyncBranchesInputs, // core: Raw -> Validated
-  execute: runSyncBranchesAction,          // core: Validated + ActionContext -> Result
-  writeOutputs,                            // local: core.setOutput
-};
+Two services are the sanctioned wrappers for runner APIs: `LoggerService` (the
+only `@actions/core` logging call site) and `FileSystemService` (the only
+`node:fs` call site). `GithubContextService` is the only reader of runner
+environment variables.
 
-export function run(overrides?: Partial<ActionContext>): Promise<void> {
-  return runGitHubAction(syncBranchesAction, overrides);
-}
-```
+## Singletons and the one shared Octokit
 
-`runGitHubAction` (in the runtime package) does `read -> validate -> build
-context -> execute -> writeOutputs | setFailed`. It builds the `ActionContext`
-(repo from `readRepoFromEnvironment()`, `ActionsLogger`,
-`OctokitGitHubService.getInstance(token)`) unless a test passes overrides — which
-keeps the whole pipeline runner-free in tests.
+Every orchestrator, validator, service, and client is a singleton
+(`private static instance` / `getInstance()` / `resetInstance()` for tests).
+Token-holding clients extend the shape with a **token guard**:
+`getInstance(token)` throws on a token mismatch rather than acting under the
+wrong identity, and `newInstance(token)` builds an isolated instance.
 
-## Build, bundle, and the committed `dist`
+To keep a single rate-limit budget, the one authenticated Octokit is cached in
+`clients/github/core/github-client-core.ts` (`getSharedOctokit`); every
+sub-client's `getInstance` wraps that same instance, and the `GitHubClient`
+facade composes the sub-clients. `GitHubClient.resetInstance()` cascades to the
+sub-clients and the shared Octokit so test cleanup is one call. Sub-client
+constructors stay injectable (tests pass a fake Octokit).
 
-- **Core is consumed from TypeScript source.** `@gforce/core`'s `main`/`types`/
-  `exports` point at `src/index.ts`. It is private and never published, so there
-  is no build ordering between core and the actions — ts-jest, `tsc`, and ncc
-  all read the latest source. A jest `moduleNameMapper` mirrors this for tests.
-- **Each action bundles to a committed `dist/index.js`** via `@vercel/ncc`
-  (self-contained: core + octokit inlined). `@gforce/github-actions` owns one
-  `bundle:<name>` script per action (`ncc build src/<name>/index.ts -o
-  ../../.github/actions/<name>/dist`), chained into its `bundle` script. GitHub
-  runs `dist/index.js`, so it **must** be committed and current. `.gitignore`
-  ignores `packages/*/dist` but keeps `.github/actions/*/dist`. The pre-commit
-  hook rebuilds and re-stages the bundle; CI's `dist:verify` — a `git diff
-  --exit-code` glob over `.github/actions/*/dist` (every bundled action) —
-  fails on a stale bundle.
+Services reach GitHub only through the facade: new endpoints go on the matching
+sub-client (branches/refs → `GitHubBranchesClient`, PRs/reviews →
+`GitHubPullRequestsClient`; a new domain gets a new sub-client under
+`clients/github/<domain>/`) and are exposed via the facade.
 
-## Testing and coverage
+## Errors and outcomes
 
-- **Per-package** 90% threshold (branches/functions/lines/statements) — weak
-  core or runtime coverage can't hide behind a single repo-wide number.
-  `@gforce/github-actions` has one jest config and one 90% gate spanning all
-  three adapters (100% today); the runtime package reports 100% across the
-  board; core reports 100% statements/functions/lines.
-- Coverage requires `sourceMap: true` in `tsconfig.base.json`: with
-  `isolatedModules`, ts-jest injects helper code (e.g. `__importStar` for
-  `import * as core`) at the top of the emitted JS. Without source maps istanbul
-  reports the **emitted** line numbers and mis-maps coverage. Source maps map it
-  back to the original `.ts`.
-- All tests mock GitHub — no network, no runner. Unit tests live in
-  `packages/github-actions/__tests__/<name>/`; each action also gets an
-  end-to-end test at `packages/github-actions/__integration__/<name>.integration.test.ts`,
-  driving `run()` (real read/validate/execute/write via `runGitHubAction`)
-  against an in-memory fake service injected as a context override, and
-  asserting the committed bundle exists.
+Throw-based: validators throw `ValidationError`, clients map every API failure
+once to `GitHubApiError` (`runOctokit` in `github-client-core`), and the entry
+point catches anything into `core.setFailed`. Expected domain outcomes are
+**values**, not exceptions — e.g. a 409 merge conflict resolves to
+`MergeOutcome = { status: 'conflict' }` and the sync workflow reacts to it.
 
-## Future-work stubs
+## Build and the committed `dist`
 
-`git-service/` and `sfdx-service/` are **interface + type declarations only** (no
-runtime code, excluded from coverage). They document where a local-git or SFDX
-wrapper would live for future actions, following the same port/adapter shape.
+Each action's `package.json` bundles its `index.ts` with **esbuild**
+(`--platform=node --target=node20`) straight into `dist/index.js`, which is
+committed (GitHub runs it). The root `bundle:all` script rebuilds every bundle;
+the pre-commit hook re-stages `dist` whenever shared source changes; CI's
+`dist:verify` (`git diff --exit-code` over `.github/actions/*/dist`) fails on a
+stale bundle. `gforce-gha-src` is consumed from TypeScript source via the
+`file:` workspace link — there is no separate library build step.
+
+The repo root `package.json` is the **only** npm workspace root (npm does not
+support nested roots); `.github/actions/package.json` just holds the
+`build:all` orchestration.
+
+## Testing
+
+- All tests live in `gforce-gha-src/__tests__/`, mirroring the source path.
+- Naming: `method_scenario_expectedResult`; every body has `// Given`,
+  `// When` (exactly one call), `// Then`.
+- Mock at the singleton boundary (`jest.spyOn(X.getInstance(), 'method')`);
+  never patch `@actions/*`, `fs`, or `@octokit` modules — the owning
+  client/service is the exception (client tests inject a fake Octokit through
+  the public constructor; `LoggerService`/`FileSystemService` tests touch the
+  real module).
+- `resetInstance()` in `afterEach` for every singleton used.
+- Coverage gate: 95% global on every metric; actual coverage is 100%.
+- `__tests__/integration/<name>.integration.test.ts` drives each action's
+  `Orchestrator.execute()` end-to-end (clients mocked at the boundary, or the
+  real filesystem for sf-find-tests) and asserts the committed bundle exists.
+  Run by `test:integration`, chained into the package `test` script.
+
+## CI
+
+`ci.yml` runs the full gate (`format:check`, `lint`, `typecheck:all`,
+`bundle:all`, `test:all`, `dist:verify`, actionlint) plus a **smoke job** that
+executes every TypeScript action from its committed `dist` on a real runner —
+proving `action.yml` wiring, bundle integrity, and output names.

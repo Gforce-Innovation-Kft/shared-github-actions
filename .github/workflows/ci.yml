@@ -35,7 +35,7 @@ jobs:
       - name: Bundle actions
         run: npm run bundle:all
 
-      - name: Test (per-package 90% coverage)
+      - name: Test (95% coverage gate, 100% actual)
         run: npm run test:all
 
       - name: Verify committed dist is current
@@ -53,7 +53,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
-          path: packages/*/coverage
+          path: gforce-gha-src/coverage
           if-no-files-found: ignore
 
   # Execute every TypeScript action from its committed dist on a real runner:
@@ -71,8 +71,8 @@ jobs:
         id: find-tests
         uses: ./.github/actions/sf-find-tests
         with:
-          package-xml: packages/github-actions/__integration__/fixtures/package.xml
-          source-dir: packages/github-actions/__integration__/fixtures/force-app
+          package-xml: gforce-gha-src/__tests__/support/fixtures/package.xml
+          source-dir: gforce-gha-src/__tests__/support/fixtures/force-app
 
       - name: Assert sf-find-tests outputs
         env:

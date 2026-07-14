@@ -11,9 +11,7 @@
     "gforce-gha-src",
     ".github/actions/sync-branches",
     ".github/actions/create-release-pr",
-    ".github/actions/sf-find-tests",
-    "packages/core",
-    "packages/github-actions-runtime"
+    ".github/actions/sf-find-tests"
   ],
   "scripts": {
     "format": "prettier --write \"**/*.{ts,mjs,cjs,js}\"",
@@ -32,7 +30,6 @@
     "@eslint/js": "^9.9.0",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.15",
-    "@vercel/ncc": "^0.38.1",
     "esbuild": "^0.23.1",
     "eslint": "^9.9.0",
     "eslint-config-prettier": "^9.1.0",
