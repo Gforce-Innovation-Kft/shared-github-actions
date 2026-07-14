@@ -49,21 +49,6 @@ export type { SfdxService } from './sfdx-service/sfdxService';
 // Shared action collaborators
 export type { ActionContext } from './actions/types';
 
-// create-release-pr use case + action seam
-export {
-  createReleasePr,
-  renderReleaseBody,
-  runCreateReleasePrAction,
-} from './actions/createReleasePr/createReleasePr';
-export { validateCreateReleasePrInputs } from './actions/createReleasePr/validateCreateReleasePrInputs';
-export type {
-  CreateReleasePrRequest,
-  CreateReleasePrResult,
-  CreateReleasePrDeps,
-  RawReleasePrInputs,
-  ValidatedReleasePrInputs,
-} from './actions/createReleasePr/types';
-
 // find-relevant-tests use case + action seam
 export {
   findRelevantTests,

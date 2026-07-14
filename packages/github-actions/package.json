@@ -7,8 +7,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --coverage --config jest.config.js",
-    "bundle": "npm run bundle:create-release-pr && npm run bundle:sf-find-tests",
-    "bundle:create-release-pr": "ncc build src/create-release-pr/index.ts -o ../../.github/actions/create-release-pr/dist",
+    "bundle": "npm run bundle:sf-find-tests",
     "bundle:sf-find-tests": "ncc build src/sf-find-tests/index.ts -o ../../.github/actions/sf-find-tests/dist"
   },
   "dependencies": {

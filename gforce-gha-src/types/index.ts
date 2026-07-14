@@ -41,3 +41,33 @@ export interface SyncBranchesResult {
   readonly pullRequestUrl?: string;
   readonly reason: string;
 }
+
+// create-release-pr
+
+/** Normalized, validated create-release-pr inputs. */
+export interface ValidatedCreateReleasePrInputs {
+  readonly sourceBranch: string;
+  readonly targetBranch: string;
+  readonly releaseVersion: string;
+  readonly title?: string;
+  readonly bodyTemplate?: string;
+  readonly draft: boolean;
+  readonly labels: readonly string[];
+  readonly reviewers: readonly string[];
+  readonly dryRun: boolean;
+  readonly githubToken: string;
+}
+
+export interface CreateReleasePrRequest extends ValidatedCreateReleasePrInputs {
+  readonly repo: RepoRef;
+}
+
+export interface CreateReleasePrResult {
+  readonly created: boolean;
+  readonly updated: boolean;
+  readonly dryRun: boolean;
+  readonly pullRequestNumber?: number;
+  readonly pullRequestUrl?: string;
+  readonly title: string;
+  readonly body: string;
+}
