@@ -9,6 +9,7 @@
   },
   "workspaces": [
     "gforce-gha-src",
+    ".github/actions/sync-branches",
     "packages/core",
     "packages/github-actions-runtime",
     "packages/github-actions"

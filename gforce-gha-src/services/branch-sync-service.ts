@@ -1,7 +1,6 @@
 /**
- * Portable orchestration for synchronizing one branch into another.
+ * The sync-branches business workflow. The ladder (default `strategy: auto`):
  *
- * The ladder (default `strategy: auto`):
  *   1. Compare source -> target. If source has no new commits, do nothing.
  *   2. If the target is an ancestor of source, fast-forward the target ref.
  *   3. Otherwise (diverged) attempt a server-side merge.
@@ -12,49 +11,33 @@
  * even when a fast-forward is possible. `dryRun` reports the planned action and
  * mutates nothing.
  */
-import { asAppError } from '../../utils/errors/errors';
-import { err, ok, type Result } from '../../utils/result/result';
-import type { ActionContext } from '../types';
-import type {
-  SyncBranchesDeps,
-  SyncBranchesRequest,
-  SyncBranchesResult,
-  ValidatedSyncInputs,
-} from './types';
+import { GitHubClient } from '../clients/github/github-client';
+import type { SyncBranchesRequest, SyncBranchesResult } from '../types';
+import { LoggerService } from './logger-service';
 
-/**
- * Adapt validated action inputs onto the portable {@link syncBranches} use case,
- * pulling the repo/logger/github collaborators from the injected
- * {@link ActionContext}. This is the seam the runtime adapter calls.
- */
-export function runSyncBranchesAction(
-  input: ValidatedSyncInputs,
-  context: ActionContext,
-): Promise<Result<SyncBranchesResult>> {
-  return syncBranches(
-    {
-      repo: context.repo,
-      sourceBranch: input.sourceBranch,
-      targetBranch: input.targetBranch,
-      strategy: input.strategy,
-      dryRun: input.dryRun,
-    },
-    { github: context.github, logger: context.logger },
-  );
-}
+export class BranchSyncService {
+  private static instance: BranchSyncService;
 
-export async function syncBranches(
-  request: SyncBranchesRequest,
-  deps: SyncBranchesDeps,
-): Promise<Result<SyncBranchesResult>> {
-  const { github, logger } = deps;
-  const { repo, sourceBranch, targetBranch, strategy, dryRun } = request;
+  private constructor() {}
 
-  try {
+  public static getInstance(): BranchSyncService {
+    if (!BranchSyncService.instance) {
+      BranchSyncService.instance = new BranchSyncService();
+    }
+    return BranchSyncService.instance;
+  }
+
+  private get logger(): LoggerService {
+    return LoggerService.getInstance();
+  }
+
+  public async sync(request: SyncBranchesRequest): Promise<SyncBranchesResult> {
+    const { repo, sourceBranch, targetBranch, strategy, dryRun, githubToken } = request;
+    const github = GitHubClient.getInstance(githubToken);
+
     const comparison = await github.compareBranches(repo, targetBranch, sourceBranch);
-    const aheadBy = comparison.aheadBy;
-    const behindBy = comparison.behindBy;
-    logger.info(
+    const { aheadBy, behindBy } = comparison;
+    this.logger.info(
       `Compared ${sourceBranch} -> ${targetBranch}: status=${comparison.status} ahead=${aheadBy} behind=${behindBy}`,
     );
 
@@ -62,17 +45,17 @@ export async function syncBranches(
 
     // 1. Nothing in source that the target lacks.
     if (aheadBy === 0) {
-      logger.info(`${targetBranch} already contains ${sourceBranch}; nothing to sync.`);
-      return ok({ ...base, action: 'none', synced: false, reason: 'up-to-date' });
+      this.logger.info(`${targetBranch} already contains ${sourceBranch}; nothing to sync.`);
+      return { ...base, action: 'none', synced: false, reason: 'up-to-date' };
     }
 
     const canFastForward = behindBy === 0;
 
     if (strategy === 'fast-forward' && !canFastForward) {
-      logger.warning(
+      this.logger.warning(
         `${targetBranch} has diverged from ${sourceBranch}; a fast-forward is not possible.`,
       );
-      return ok({ ...base, action: 'none', synced: false, reason: 'not-fast-forwardable' });
+      return { ...base, action: 'none', synced: false, reason: 'not-fast-forwardable' };
     }
 
     const useFastForward = canFastForward && strategy !== 'merge';
@@ -80,21 +63,21 @@ export async function syncBranches(
 
     // Dry-run short-circuits before any mutation.
     if (dryRun) {
-      logger.info(`Dry run: would ${plannedAction} ${sourceBranch} into ${targetBranch}.`);
-      return ok({ ...base, action: plannedAction, synced: false, reason: 'dry-run' });
+      this.logger.info(`Dry run: would ${plannedAction} ${sourceBranch} into ${targetBranch}.`);
+      return { ...base, action: plannedAction, synced: false, reason: 'dry-run' };
     }
 
     if (useFastForward) {
       const sha = await github.getBranchHeadSha(repo, sourceBranch);
       await github.updateBranchRef(repo, targetBranch, sha, false);
-      logger.info(`Fast-forwarded ${targetBranch} to ${sha}.`);
-      return ok({
+      this.logger.info(`Fast-forwarded ${targetBranch} to ${sha}.`);
+      return {
         ...base,
         action: 'fast-forward',
         synced: true,
         resultSha: sha,
         reason: 'fast-forward',
-      });
+      };
     }
 
     // Diverged (or forced) -> server-side merge.
@@ -106,22 +89,16 @@ export async function syncBranches(
     );
 
     if (outcome.status === 'merged') {
-      logger.info(`Merged ${sourceBranch} into ${targetBranch} (${outcome.sha}).`);
-      return ok({
-        ...base,
-        action: 'merge',
-        synced: true,
-        resultSha: outcome.sha,
-        reason: 'merge',
-      });
+      this.logger.info(`Merged ${sourceBranch} into ${targetBranch} (${outcome.sha}).`);
+      return { ...base, action: 'merge', synced: true, resultSha: outcome.sha, reason: 'merge' };
     }
 
     if (outcome.status === 'nothing') {
-      return ok({ ...base, action: 'none', synced: false, reason: 'already-merged' });
+      return { ...base, action: 'none', synced: false, reason: 'already-merged' };
     }
 
     // Conflict -> reuse or open a sync PR.
-    logger.warning(
+    this.logger.warning(
       `Merge of ${sourceBranch} into ${targetBranch} conflicts; opening a sync pull request.`,
     );
     const existing = await github.listOpenPullRequests(repo, {
@@ -140,15 +117,17 @@ export async function syncBranches(
           `need manual resolution.`,
       }));
 
-    return ok({
+    return {
       ...base,
       action: 'pull-request',
       synced: false,
       pullRequestNumber: pullRequest.number,
       pullRequestUrl: pullRequest.htmlUrl,
       reason: 'merge-conflict',
-    });
-  } catch (error) {
-    return err(asAppError(error));
+    };
+  }
+
+  public static resetInstance(): void {
+    BranchSyncService.instance = undefined as unknown as BranchSyncService;
   }
 }

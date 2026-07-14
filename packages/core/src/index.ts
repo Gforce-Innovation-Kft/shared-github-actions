@@ -49,20 +49,6 @@ export type { SfdxService } from './sfdx-service/sfdxService';
 // Shared action collaborators
 export type { ActionContext } from './actions/types';
 
-// sync-branches use case + action seam
-export { syncBranches, runSyncBranchesAction } from './actions/syncBranches/syncBranches';
-export { validateSyncBranchesInputs } from './actions/syncBranches/validateSyncBranchesInputs';
-export { SYNC_STRATEGIES } from './actions/syncBranches/types';
-export type {
-  SyncStrategy,
-  SyncAction,
-  SyncBranchesRequest,
-  SyncBranchesResult,
-  SyncBranchesDeps,
-  RawSyncInputs,
-  ValidatedSyncInputs,
-} from './actions/syncBranches/types';
-
 // create-release-pr use case + action seam
 export {
   createReleasePr,

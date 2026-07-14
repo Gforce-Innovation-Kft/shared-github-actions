@@ -6,7 +6,8 @@
   "license": "MIT",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "jest --coverage --config jest.config.cjs",
+    "test": "jest --coverage --config jest.config.cjs && npm run test:integration",
+    "test:integration": "jest --config jest.integration.config.cjs",
     "lint": "eslint ."
   },
   "dependencies": {
