@@ -11,9 +11,9 @@
     "gforce-gha-src",
     ".github/actions/sync-branches",
     ".github/actions/create-release-pr",
+    ".github/actions/sf-find-tests",
     "packages/core",
-    "packages/github-actions-runtime",
-    "packages/github-actions"
+    "packages/github-actions-runtime"
   ],
   "scripts": {
     "format": "prettier --write \"**/*.{ts,mjs,cjs,js}\"",

@@ -52,6 +52,26 @@ describe('Validator (create-release-pr)', () => {
     });
   });
 
+  test('inputValidation_absentOptionalKeys_defaultsTitleAndTemplateToUndefined', () => {
+    // Given
+    const rawInputs = {
+      'source-branch': 'develop',
+      'target-branch': 'main',
+      'release-version': 'v1.2.0',
+      'dry-run': 'false',
+      'github-token': 'test-token',
+    };
+
+    // When
+    const result = Validator.getInstance().inputValidation(rawInputs);
+
+    // Then
+    expect(result.title).toBeUndefined();
+    expect(result.bodyTemplate).toBeUndefined();
+    expect(result.labels).toEqual([]);
+    expect(result.reviewers).toEqual([]);
+  });
+
   test('inputValidation_blankDryRun_defaultsToTrue', () => {
     // Given
     const rawInputs = { ...VALID_RAW_INPUTS, 'dry-run': '' };
