@@ -8,6 +8,26 @@ import { ValidationError } from './errors';
 const TRUE_VALUES = new Set(['true', '1', 'yes', 'y', 'on']);
 const FALSE_VALUES = new Set(['false', '0', 'no', 'n', 'off']);
 
+/**
+ * Read one named input from the raw payload an entry point hands the
+ * Orchestrator. Throws when the payload is not an object or the value is not a
+ * string; returns `undefined` when the input is simply absent.
+ */
+export function readStringInput(rawInputs: unknown, name: string): string | undefined {
+  if (typeof rawInputs !== 'object' || rawInputs === null) {
+    throw new ValidationError('Expected raw inputs to be an object');
+  }
+  const entry = Object.entries(rawInputs).find(([key]) => key === name);
+  const value: unknown = entry === undefined ? undefined : entry[1];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new ValidationError(`Input "${name}" must be a string`);
+  }
+  return value;
+}
+
 /** Trim a value and require it to be non-empty. */
 export function requireNonEmpty(name: string, value: string | undefined): string {
   const trimmed = (value ?? '').trim();

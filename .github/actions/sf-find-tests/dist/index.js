@@ -33862,175 +33862,6 @@ function validateFindTestsInputs(raw) {
 
 /***/ }),
 
-/***/ 5633:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.runSyncBranchesAction = runSyncBranchesAction;
-exports.syncBranches = syncBranches;
-/**
- * Portable orchestration for synchronizing one branch into another.
- *
- * The ladder (default `strategy: auto`):
- *   1. Compare source -> target. If source has no new commits, do nothing.
- *   2. If the target is an ancestor of source, fast-forward the target ref.
- *   3. Otherwise (diverged) attempt a server-side merge.
- *   4. If that merge conflicts, reuse or open a "sync" pull request so a human
- *      can resolve it.
- *
- * `strategy: fast-forward` restricts to step 2; `strategy: merge` forces step 3
- * even when a fast-forward is possible. `dryRun` reports the planned action and
- * mutates nothing.
- */
-const errors_1 = __nccwpck_require__(879);
-const result_1 = __nccwpck_require__(4575);
-/**
- * Adapt validated action inputs onto the portable {@link syncBranches} use case,
- * pulling the repo/logger/github collaborators from the injected
- * {@link ActionContext}. This is the seam the runtime adapter calls.
- */
-function runSyncBranchesAction(input, context) {
-    return syncBranches({
-        repo: context.repo,
-        sourceBranch: input.sourceBranch,
-        targetBranch: input.targetBranch,
-        strategy: input.strategy,
-        dryRun: input.dryRun,
-    }, { github: context.github, logger: context.logger });
-}
-async function syncBranches(request, deps) {
-    const { github, logger } = deps;
-    const { repo, sourceBranch, targetBranch, strategy, dryRun } = request;
-    try {
-        const comparison = await github.compareBranches(repo, targetBranch, sourceBranch);
-        const aheadBy = comparison.aheadBy;
-        const behindBy = comparison.behindBy;
-        logger.info(`Compared ${sourceBranch} -> ${targetBranch}: status=${comparison.status} ahead=${aheadBy} behind=${behindBy}`);
-        const base = { aheadBy, behindBy, dryRun };
-        // 1. Nothing in source that the target lacks.
-        if (aheadBy === 0) {
-            logger.info(`${targetBranch} already contains ${sourceBranch}; nothing to sync.`);
-            return (0, result_1.ok)({ ...base, action: 'none', synced: false, reason: 'up-to-date' });
-        }
-        const canFastForward = behindBy === 0;
-        if (strategy === 'fast-forward' && !canFastForward) {
-            logger.warning(`${targetBranch} has diverged from ${sourceBranch}; a fast-forward is not possible.`);
-            return (0, result_1.ok)({ ...base, action: 'none', synced: false, reason: 'not-fast-forwardable' });
-        }
-        const useFastForward = canFastForward && strategy !== 'merge';
-        const plannedAction = useFastForward ? 'fast-forward' : 'merge';
-        // Dry-run short-circuits before any mutation.
-        if (dryRun) {
-            logger.info(`Dry run: would ${plannedAction} ${sourceBranch} into ${targetBranch}.`);
-            return (0, result_1.ok)({ ...base, action: plannedAction, synced: false, reason: 'dry-run' });
-        }
-        if (useFastForward) {
-            const sha = await github.getBranchHeadSha(repo, sourceBranch);
-            await github.updateBranchRef(repo, targetBranch, sha, false);
-            logger.info(`Fast-forwarded ${targetBranch} to ${sha}.`);
-            return (0, result_1.ok)({
-                ...base,
-                action: 'fast-forward',
-                synced: true,
-                resultSha: sha,
-                reason: 'fast-forward',
-            });
-        }
-        // Diverged (or forced) -> server-side merge.
-        const outcome = await github.mergeBranches(repo, targetBranch, sourceBranch, `Merge ${sourceBranch} into ${targetBranch}`);
-        if (outcome.status === 'merged') {
-            logger.info(`Merged ${sourceBranch} into ${targetBranch} (${outcome.sha}).`);
-            return (0, result_1.ok)({
-                ...base,
-                action: 'merge',
-                synced: true,
-                resultSha: outcome.sha,
-                reason: 'merge',
-            });
-        }
-        if (outcome.status === 'nothing') {
-            return (0, result_1.ok)({ ...base, action: 'none', synced: false, reason: 'already-merged' });
-        }
-        // Conflict -> reuse or open a sync PR.
-        logger.warning(`Merge of ${sourceBranch} into ${targetBranch} conflicts; opening a sync pull request.`);
-        const existing = await github.listOpenPullRequests(repo, {
-            head: sourceBranch,
-            base: targetBranch,
-        });
-        const pullRequest = existing[0] ??
-            (await github.createPullRequest(repo, {
-                head: sourceBranch,
-                base: targetBranch,
-                title: `Sync ${sourceBranch} into ${targetBranch}`,
-                body: `Automated sync pull request.\n\n` +
-                    `A direct merge of \`${sourceBranch}\` into \`${targetBranch}\` hit conflicts that ` +
-                    `need manual resolution.`,
-            }));
-        return (0, result_1.ok)({
-            ...base,
-            action: 'pull-request',
-            synced: false,
-            pullRequestNumber: pullRequest.number,
-            pullRequestUrl: pullRequest.htmlUrl,
-            reason: 'merge-conflict',
-        });
-    }
-    catch (error) {
-        return (0, result_1.err)((0, errors_1.asAppError)(error));
-    }
-}
-
-
-/***/ }),
-
-/***/ 3473:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SYNC_STRATEGIES = void 0;
-exports.SYNC_STRATEGIES = ['auto', 'fast-forward', 'merge'];
-
-
-/***/ }),
-
-/***/ 3990:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateSyncBranchesInputs = validateSyncBranchesInputs;
-/**
- * Validate and normalize the raw sync-branches inputs. Portable: it operates on
- * plain strings (the shape Action inputs arrive in) and never touches
- * `@actions/core`, so it is unit-testable without a runner.
- */
-const validation_1 = __nccwpck_require__(3023);
-const errors_1 = __nccwpck_require__(879);
-const types_1 = __nccwpck_require__(3473);
-function validateSyncBranchesInputs(raw) {
-    const sourceBranch = (0, validation_1.requireNonEmpty)('source-branch', raw.sourceBranch);
-    const targetBranch = (0, validation_1.requireNonEmpty)('target-branch', raw.targetBranch);
-    const githubToken = (0, validation_1.requireNonEmpty)('github-token', raw.githubToken);
-    if (sourceBranch === targetBranch) {
-        throw new errors_1.ValidationError('source-branch and target-branch must be different');
-    }
-    return {
-        sourceBranch,
-        targetBranch,
-        githubToken,
-        strategy: (0, validation_1.parseEnum)('strategy', raw.strategy, types_1.SYNC_STRATEGIES, 'auto'),
-        dryRun: (0, validation_1.parseBoolean)(raw.dryRun, true),
-    };
-}
-
-
-/***/ }),
-
 /***/ 2928:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -34475,7 +34306,7 @@ exports.OctokitPullRequestService = OctokitPullRequestService;
  * import only from `@gforce/core`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createNodeSourceFileReader = exports.validateFindTestsInputs = exports.runFindTestsAction = exports.parseApexMembers = exports.findRelevantTests = exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.SYNC_STRATEGIES = exports.validateSyncBranchesInputs = exports.runSyncBranchesAction = exports.syncBranches = exports.parseRepoRef = exports.OctokitGitHubService = exports.OctokitPullRequestService = exports.OctokitBranchService = exports.GitHubClient = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
+exports.createNodeSourceFileReader = exports.validateFindTestsInputs = exports.runFindTestsAction = exports.parseApexMembers = exports.findRelevantTests = exports.validateCreateReleasePrInputs = exports.runCreateReleasePrAction = exports.renderReleaseBody = exports.createReleasePr = exports.parseRepoRef = exports.OctokitGitHubService = exports.OctokitPullRequestService = exports.OctokitBranchService = exports.GitHubClient = exports.parseEnum = exports.parseList = exports.parseBoolean = exports.requireNonEmpty = exports.NoopLogger = exports.asAppError = exports.GitHubApiError = exports.ValidationError = exports.AppError = exports.isErr = exports.isOk = exports.err = exports.ok = void 0;
 // Result + errors
 var result_1 = __nccwpck_require__(4575);
 Object.defineProperty(exports, "ok", ({ enumerable: true, get: function () { return result_1.ok; } }));
@@ -34509,14 +34340,6 @@ var gitHubService_1 = __nccwpck_require__(4370);
 Object.defineProperty(exports, "OctokitGitHubService", ({ enumerable: true, get: function () { return gitHubService_1.OctokitGitHubService; } }));
 var parseRepoRef_1 = __nccwpck_require__(4123);
 Object.defineProperty(exports, "parseRepoRef", ({ enumerable: true, get: function () { return parseRepoRef_1.parseRepoRef; } }));
-// sync-branches use case + action seam
-var syncBranches_1 = __nccwpck_require__(5633);
-Object.defineProperty(exports, "syncBranches", ({ enumerable: true, get: function () { return syncBranches_1.syncBranches; } }));
-Object.defineProperty(exports, "runSyncBranchesAction", ({ enumerable: true, get: function () { return syncBranches_1.runSyncBranchesAction; } }));
-var validateSyncBranchesInputs_1 = __nccwpck_require__(3990);
-Object.defineProperty(exports, "validateSyncBranchesInputs", ({ enumerable: true, get: function () { return validateSyncBranchesInputs_1.validateSyncBranchesInputs; } }));
-var types_1 = __nccwpck_require__(3473);
-Object.defineProperty(exports, "SYNC_STRATEGIES", ({ enumerable: true, get: function () { return types_1.SYNC_STRATEGIES; } }));
 // create-release-pr use case + action seam
 var createReleasePr_1 = __nccwpck_require__(2901);
 Object.defineProperty(exports, "createReleasePr", ({ enumerable: true, get: function () { return createReleasePr_1.createReleasePr; } }));
