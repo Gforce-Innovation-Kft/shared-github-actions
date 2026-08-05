@@ -17,6 +17,11 @@ on:
         required: false
         default: 'recursive'
         type: string
+      scratch-org-definition:
+        description: 'Scratch org definition file. Was hardcoded to config/scratch-orgs/ci.json; consumers that keep their definition elsewhere can now point at it.'
+        required: false
+        default: 'config/scratch-orgs/ci.json'
+        type: string
       retention-days:
         description: 'Retention for the scratch-org test results artifact'
         required: false
@@ -85,15 +90,12 @@ jobs:
           set-default-dev-hub: 'true'
 
       - name: Create scratch org
-        shell: bash
-        run: |
-          set -euo pipefail
-          sf org create scratch \
-            --definition-file config/scratch-orgs/ci.json \
-            --alias ci-scratch \
-            --duration-days 1 \
-            --set-default \
-            --wait 30
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-scratch-org@v1
+        with:
+          definition-file: ${{ inputs.scratch-org-definition }}
+          alias: ci-scratch
+          dev-hub-alias: devhub
+          duration-days: "1"
 
       - name: Push source
         shell: bash
