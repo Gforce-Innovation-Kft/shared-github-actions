@@ -461,7 +461,179 @@ a verifier that reproduces the failure, and a remediation the verifier confirms 
 
 ---
 
-## 11. Where this changes the architecture document
+## 11. Context and cost management
+
+AI credits are the operating cost of this system. Left unmanaged, a healer that reads whole
+build logs into context will cost more than the engineer it replaces. Cost is therefore a
+designed-in constraint with its own configuration layer, not an afterthought.
+
+### 11.1 The five levers, in order of impact
+
+| # | Lever | Effect |
+|---|---|---|
+| 1 | **Don't call the model** | A tier-1 playbook hit costs **zero tokens**. Every promoted playbook permanently removes a failure class from the paid path. This dwarfs every other lever. |
+| 2 | **Pull, don't push** | The agent never receives raw evidence. It gets a compact case brief and *tools* to fetch what it needs. |
+| 3 | **Prompt caching** | The stable prefix (system prompt, policy summary, tool definitions, skill docs) is cached; cache reads cost ~0.1× input. Pays back from the second run onward. |
+| 4 | **Per-class budgets** | Effort, step count, token ceiling and wall clock configured per route and per taxonomy class. |
+| 5 | **Circuit breakers** | Per-case, per-repo-per-day, per-org-per-month, plus a repeat-failure damper. |
+
+### 11.2 Context: the evidence funnel
+
+The failure mode to avoid is obvious once stated — a 40 MB build log, a 5,000-line metadata
+diff and a full dependency tree pushed into the first prompt. The design forbids it structurally.
+
+```mermaid
+flowchart TB
+  RAW["raw evidence<br/>logs · diffs · manifests · trees<br/><b>MB scale</b>"]
+  RAW --> EXT["extract at the collector<br/>error regions · structured DevHub records<br/>per-directory diff counts"]
+  EXT --> S3[("full payloads → S3<br/>referenced, not inlined")]
+  EXT --> BRIEF["<b>case brief</b><br/>~2–4k tokens<br/>fingerprint · class · top signals<br/>· precedents · digest deltas"]
+  BRIEF --> AG["agent"]
+  AG -->|"tool call, on demand"| S3
+  AG -->|"tool call, on demand"| SK["skill docs<br/>progressive disclosure"]
+```
+
+**Rules, enforced in code:**
+
+- **Every tool declares `maxResultTokens`.** A result over the cap is truncated to a summary
+  plus a continuation handle; the agent can fetch specific slices (`path`, `hunk`, `lineRange`).
+  One `git diff` can never eat the window.
+- **Summaries before bodies.** `build.compareWorkspaces` returns per-directory change counts and
+  the top-N hunks ranked by relevance to the error signature; the agent drills in only where it
+  has a reason to.
+- **Structured over prose.** `Package2VersionCreateRequestError` records go in as JSON, not as
+  log text — the same information at a fraction of the tokens.
+- **Skills load on demand.** Loading `sf-version-lifecycle` is a tool call, not a prompt prefix.
+- **Context editing for long loops.** `clear_tool_uses_20250919` clears superseded tool results
+  once a hypothesis is discarded, so a 40-step investigation doesn't carry 40 payloads.
+
+### 11.3 Prompt cache layout
+
+```
+┌─ cached prefix ────────────────────────────────────┐
+│ system prompt + policy summary                     │  ~6k, identical every run
+│ tool definitions (deterministically sorted)        │  ~4k
+│ loaded skill docs                                  │  2–5k each
+├─ cache breakpoint ─────────────────────────────────┤
+│ case brief (repo, fingerprint, signals, precedents)│  volatile
+│ conversation + tool results                        │  volatile
+└────────────────────────────────────────────────────┘
+```
+
+Silent invalidators that would destroy this and must be kept out of the prefix: timestamps, run
+ids, repo names, non-deterministic tool ordering, per-repo policy interpolation. All repo- and
+run-specific content goes **after** the breakpoint. Cache effectiveness is asserted in the
+trace — `cache_read_input_tokens` at zero across consecutive runs is treated as a defect, not a
+curiosity.
+
+### 11.4 Limits — hardcoded now, configurable later
+
+> **Phasing.** The configuration layer below is **v2**. v0 and v1 hardcode a single set of
+> constants in one file. Building a precedence-resolving config system before there is any
+> measured cost data would be tuning knobs against guesses.
+
+**v0 / v1 — `src/core/limits.ts`, one object, no YAML, no resolution logic:**
+
+```ts
+export const LIMITS = {
+  model: 'claude-opus-5',
+  effort: 'high',
+  maxAgentSteps: 30,
+  maxTokens: 120_000,
+  taskBudgetTokens: 50_000,        // model paces itself and wraps up gracefully
+  maxToolResultTokens: 8_000,      // per tool call
+  maxWallClockMinutes: 20,
+  maxScratchOrgs: 2,
+  maxVersionCreateAttempts: 3,
+  repeatFingerprintEscalateAfter: 2,
+} as const;
+```
+
+Two of these do the real work and must exist from the first line of v1 code:
+**`taskBudgetTokens`** (bounded, graceful termination) and **`repeatFingerprintEscalateAfter`**
+(a broken pipeline failing on every push is the most likely way to burn credits for nothing).
+The rest are guard rails. In v0 there is no model in the fix path at all, so only the scratch
+org, version-create and repeat-fingerprint limits apply.
+
+**v2 target — `policy/budgets.yml`**, once the eval harness has produced real cost-per-class
+data to tune against. Three levels of precedence: **taxonomy class › route › default.**
+
+```yaml
+# policy/budgets.yml
+defaults:
+  effort: high
+  maxAgentSteps: 40
+  maxTokens: 150000
+  taskBudgetTokens: 60000        # the model paces itself and wraps up gracefully
+  maxWallClockMinutes: 25
+  maxScratchOrgs: 2
+  maxVersionCreateAttempts: 3
+  maxCostUsd: 2.50
+
+byRoute:
+  guided:        { maxTokens: 0, maxAgentSteps: 0 }        # no model call at all
+  assisted:      { effort: medium, maxTokens: 40000,  taskBudgetTokens: 20000, maxAgentSteps: 15 }
+  investigation: { effort: xhigh,  maxTokens: 150000, taskBudgetTokens: 60000, maxAgentSteps: 40 }
+
+byTaxonomyClass:
+  platform.*:          { effort: low,   maxTokens: 10000,  maxAgentSteps: 5 }
+  build.env-rotation:  { effort: low,   maxTokens: 15000,  maxActionClass: A0 }
+  dependency.*:        { effort: high,  maxTokens: 60000,  maxScratchOrgs: 0 }
+  apex.*:              { effort: xhigh, maxTokens: 120000, maxScratchOrgs: 1 }
+  unknown:             { effort: xhigh, maxTokens: 200000, maxScratchOrgs: 2, maxCostUsd: 5.00 }
+
+circuitBreakers:
+  maxReconciliationsPerRepoPerDay: 20
+  maxSpendPerOrgPerMonthUsd: 300
+  repeatFingerprintEscalateAfter: 2      # same fingerprint, same branch → stop diagnosing
+```
+
+**`taskBudgetTokens` is the mechanism behind "how long it can go".** It is not the same as a
+hard cap: the model is told its budget and paces itself, prioritising and wrapping up gracefully
+as it is consumed, rather than being truncated mid-thought. `maxTokens` remains the hard ceiling
+underneath it. Minimum meaningful task budget is 20,000 tokens.
+
+**The repeat-fingerprint damper matters more than it looks.** A pipeline broken for a known
+reason will fail on every push. Re-diagnosing the same fingerprint twenty times is the single
+most likely way to burn credits for nothing. After the second identical fingerprint on the same
+branch, the healer posts the prior findings and stops — no model call.
+
+### 11.5 Model selection
+
+`claude-opus-5` everywhere, hardcoded, for v0–v1. Effort — not model — is the lever, and it is a
+constant until there is data to tune it with.
+
+From v2 a `model:` key is available at every level of `budgets.yml` — for example routing
+`platform.*` transient classification to a cheaper model. **Nothing downgrades automatically, in
+any phase.** Which model runs which class is your economic decision, made explicitly in a
+committed file, never something the system decides on your behalf at runtime.
+
+### 11.6 Cost accounting and the economic test
+
+Every reconciliation records `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`
+and derived `costUsd` in the `CaseRecord`, and the findings comment carries a one-line footer:
+
+```
+⏱ 4m12s · 🎫 route: investigation · 🧠 61k in (48k cached) / 9k out · 💰 $0.34 · 🌱 1 scratch org
+```
+
+Tracked metrics: **cost per case by class**, **cost per fix actually accepted by a human**,
+**tokens avoided by tier-1 hits**, and cache hit rate.
+
+**The test the system must pass, per class:** if the cost of a reconciliation exceeds the value
+of the engineer time it saves, that class does not belong on the paid path. The response is to
+promote a playbook for it (moving it to tier 1, at zero cost) or to disable the class — not to
+accept the spend. This is a stated exit criterion, and the metrics above exist to make it
+answerable rather than a matter of opinion.
+
+> Modelled expectations to be **replaced by measurement** in v1: a tier-1 hit costs nothing; an
+> assisted adaptation is expected in the low tens of cents; a full unknown-class investigation
+> with a metadata diff is expected in the low single-digit dollars. These are estimates for
+> sizing the caps, not commitments — the eval harness produces the real numbers.
+
+---
+
+## 12. Where this changes the architecture document
 
 Deltas to fold into `2026-08-05-sf-selfheal-packaging-design.md`:
 
@@ -477,10 +649,16 @@ Deltas to fold into `2026-08-05-sf-selfheal-packaging-design.md`:
 | 8 | Correlation is bidirectional: `Package2Version.Tag` **and** an annotated git tag `pkg/<package>/<version>`; divergence between them is a finding |
 | 9 | Packaging job needs `contents: write` to push version tags |
 | 10 | Workflow inputs derived from context (`tag`, `branch`, `package`, `skill`, `max-action-class`); overrides stay optional |
+| 11 | **v0/v1:** hardcoded `src/core/limits.ts`. **v2:** `policy/budgets.yml` with per-route and per-class caps (an A5 path) |
+| 12 | `taskBudgetTokens` on every agent invocation, so the model paces itself instead of being truncated |
+| 13 | Tool descriptors gain `maxResultTokens` + a continuation handle; no tool result can flood the window |
+| 14 | Circuit breakers: per-repo-per-day, per-org-per-month, and a repeat-fingerprint damper |
+| 15 | `CaseRecord` gains cache token counts and `costUsd`; findings comments carry a cost footer |
+| 16 | Build provenance: see `2026-08-05-sf-ci-build-provenance-design.md` for stages S1–S16, the workspace digest, the mutation record, and ladder step L3b |
 
 ---
 
-## 12. Open questions
+## 13. Open questions
 
 1. **Which sandbox(es) go on the installable allowlist first**, and who owns approving additions to that file?
 2. **`org-health-check` cadence** — daily is cheap and catches quota exhaustion before it bites; is a scheduled workflow in the consumer repo acceptable, or should it live centrally?

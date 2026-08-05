@@ -278,6 +278,11 @@ L3  Delta     ★   diff since the last SUCCESSFUL version of this package:
                   git diff <lastSuccessSha>..HEAD scoped to the package dir,
                   sfdx-project.json diff (aliases / deps / ancestor / versionNumber),
                   dependency-resolution diff (subscriber package version ids)
+L3b Build     ★   mutation delta — the build may differ even when the source does not:
+                  BuildManifest diff (toolchain, resolved deps, env fingerprints,
+                  workspace digests T0/T1/T2, mutation records).
+                  source diff empty + workspace digest differs ⇒ build mutation drift.
+                  See 2026-08-05-sf-ci-build-provenance-design.md
 L4  Reproduce     cheapest check that would have caught it:
                     metadata-only → scratch org + project deploy validate
                     Apex          → scratch org deploy + RunLocalTests
@@ -380,13 +385,24 @@ interface CaseRecord {                     // one file per reconciliation
   outcome: 'fixed' | 'proposed' | 'escalated' | 'failed';
   budgetConsumed: BudgetLedger;
   humanFeedback?: { verdict: 'correct'|'wrong'|'partial'; note: string; };
-  cost: { inputTokens: number; outputTokens: number; wallClockMs: number; };
+  cost: { inputTokens: number; outputTokens: number;
+          cacheReadTokens: number; cacheWriteTokens: number;
+          costUsd: number; wallClockMs: number; };
 }
 
 interface BudgetLedger {                   // persisted per (repo, package, headSha)
   versionCreateAttempts: number;           // hard cap 3
   scratchOrgsCreated: number;
-  agentSteps: number; tokens: number; wallClockMs: number;
+  agentSteps: number; tokens: number; wallClockMs: number; costUsd: number;
+}
+
+// v0/v1: a hardcoded constant in src/core/limits.ts.
+// v2: resolved from policy/budgets.yml — precedence: taxonomy class › route › default
+interface ResolvedBudget extends BudgetLedger {
+  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  model: string;                           // default claude-opus-5; overridden only explicitly
+  taskBudgetTokens: number;                // the model paces itself against this
+  maxActionClass: ActionClass;
 }
 ```
 
@@ -431,6 +447,7 @@ family. New classes arrive via PR.
 | `devhub` | quota exhausted, org expired/locked, permission missing, feature disabled | `orgHealth` | A0 | escalate |
 | `platform` | transient 5xx, maintenance window, request queued indefinitely | `idempotencyCheck` | A4 | retry with backoff |
 | `tooling` | CLI/plugin version skew, plugin missing, node/JDK issue | `toolingCheck` | A2 | pin versions |
+| `build` | mutation drift, env rotation, dependency float, toolchain skew, contamination, `.forceignore` drift | `manifestDiff` | A2 (A0 for `env-rotation`) | pin the drifting input → PR |
 | `unknown` | everything else — **first-class** | dynamic (agent-selected) | A2 | investigate + propose playbook |
 
 **Designing for the unknown bucket** is the point of the registry. `unknown` gets: full ladder
@@ -505,6 +522,8 @@ interface ToolDescriptor<I, O> {
   costHint: { wallClockMs: number; quota?: 'versionCreate'|'scratchOrg'; };
   input: JSONSchema;  output: JSONSchema;
   redact: (o: O) => O;               // mandatory, applied before the result is returned
+  maxResultTokens: number;           // mandatory — over-cap results are summarised
+  summarise?: (o: O) => O;           // how to shrink; must emit a continuation handle
   run: (i: I, ctx: ToolContext) => Promise<O>;
 }
 ```
@@ -518,6 +537,7 @@ interface ToolDescriptor<I, O> {
 | `repo.write` | `applyStructuredEdit`, `commitToBranch`, `openPullRequest` | A2 / A3 |
 | `gh` | `getRun`, `getJobLogs`, `comment`, `rerunWorkflow` | A0 / A2 |
 | `fs.scoped` | `readWithinWorkspace`, `listWithinWorkspace` | A0 |
+| `build` | `getManifest`, `lastSuccessful`, `diffManifests`, `getMutationRecord`, `compareWorkspaces` | A0 |
 | `knowledge` | `matchPlaybook`, `searchCases`, `loadSkill`, `proposePlaybook` | A0 / A2 |
 | `plan` | `emit_remediation_plan` (terminal) | — |
 
@@ -934,9 +954,12 @@ path. If it isn't valuable deterministic, adding a model won't save it.
    the test fixture generator and the demo, and it must exist before the healer.
 5. Normalizer + fingerprint + `taxonomy/pkg2.yml` seed.
 6. Triage engine + ~8 hand-written playbooks.
-7. Findings PR comment + case recording. **Diagnose-only** — the only write is the comment
+7. **Build provenance** — pipeline stages S1–S16, the three workspace snapshots, the mutation
+   record, env fingerprints, and the `BuildManifest` to S3. Git version tags on success. See
+   `2026-08-05-sf-ci-build-provenance-design.md`.
+8. Findings PR comment + case recording. **Diagnose-only** — the only write is the comment
    itself; no fix branches, no commits, no version-create retries.
-8. Replay test suite over the injected fixtures.
+9. Replay test suite over the injected fixtures, including mutation-drift and env-rotation cases.
 
 **Exit criteria:** ≥6 of 8 injected classes correctly classified from evidence alone; every run
 produces a case record; zero model calls.
@@ -950,7 +973,10 @@ produces a case record; zero model calls.
 5. Policy engine with A0–A5, path allowlist, structural diff validator.
 6. Budget ledger, limits pre-flight, transient retry with idempotency check.
 7. A2 auto-PR for config fixes; A4 gated version-create retry (cap 3).
-8. Eval harness over the fixture corpus.
+8. **Cost containment, hardcoded** — `src/core/limits.ts`, `taskBudgetTokens` on every
+   invocation, per-tool `maxResultTokens`, the prompt-cache prefix layout, and the
+   repeat-fingerprint damper. No configuration layer yet.
+9. Eval harness over the fixture corpus, reporting cost per case by class.
 
 **Exit criteria:** ≥1 real failure class auto-fixed end-to-end with verification; false-fix rate
 of zero on the fixture corpus; cost per case within budget.
@@ -961,8 +987,11 @@ of zero on the fixture corpus; cost per case within budget.
 2. Retrieval tiers 2–3 (BM25, then embeddings).
 3. Agent-proposed playbooks → PR, with promotion criteria enforced.
 4. Human-feedback verdicts and playbook demotion.
-5. Metrics dashboard: route distribution, unknown rate, verifier precision, fix acceptance, cost.
-6. Second consumer repo to break demo over-fitting.
+5. **Governance and credit layer** — `policy/budgets.yml` with per-route and per-taxonomy-class
+   caps, circuit breakers (per-repo-per-day, per-org-per-month), explicit per-class model
+   selection. Tuned against the cost data v1 produced, not against guesses.
+6. Metrics dashboard: route distribution, unknown rate, verifier precision, fix acceptance, cost.
+7. Second consumer repo to break demo over-fitting.
 
 **Exit criteria:** unknown rate trending down over ≥30 real cases; ≥1 playbook promoted from an
 agent proposal; measurable reduction in mean time to diagnosis.
@@ -998,3 +1027,8 @@ agent proposal; measurable reduction in mean time to diagnosis.
 | D14 | Salesforce-side diff is two tools: version content (always) + metadata via scratch orgs (tier 3) | Catches the "nothing in the repo changed" class without paying for it every run |
 | D15 | Correlation recorded both ways: `Package2Version.Tag` **and** an annotated git tag `pkg/<package>/<version>` | Git is instant and offline; the Dev Hub is authoritative; disagreement is itself a finding |
 | D16 | Workflow inputs are derived from context wherever possible; overrides stay optional | Every required input is a place the caller can be wrong |
+| D17 | Build provenance: three workspace snapshots + a mutation record per build; ladder step L3b | The commit does not identify what was packaged when the build mutates in place |
+| D18 | Provenance to S3 (manifests and mutations indefinitely; trees content-addressed) | GH artifacts expire at 90 days; the corpus routinely needs older builds |
+| D19 | Limits hardcoded in `src/core/limits.ts` for v0/v1; the per-route/per-class config layer is v2 | Tuning knobs before there is measured cost data is guesswork. `taskBudgetTokens` and the repeat-fingerprint damper ship in v1 regardless |
+| D20 | Context is pulled by the agent, never pushed; every tool declares `maxResultTokens` | One unbounded tool result would otherwise dominate the cost of every run |
+| D21 | Model selection is explicit configuration, never automatic downgrade | Which model runs which class is an economic decision the owner makes in a committed file |
