@@ -115,14 +115,14 @@ jobs:
           submodules: ${{ inputs.checkout-submodules }}
 
       - name: Salesforce Dev Hub login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@refactor/simplify-sf-package-create
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v1
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: devhub
           set-default-dev-hub: "true"
 
       - name: Create scratch org
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-scratch-org@refactor/simplify-sf-package-create
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-scratch-org@v1
         with:
           definition-file: ${{ inputs.scratch-org-definition }}
           alias: release-check
@@ -231,7 +231,7 @@ jobs:
           fetch-depth: 0
 
       - name: Salesforce Dev Hub login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@refactor/simplify-sf-package-create
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v1
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: devhub
@@ -239,7 +239,7 @@ jobs:
 
       - name: Create package version
         id: create
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-create@refactor/simplify-sf-package-create
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-create@v1
         with:
           package: ${{ inputs.package }}
           dev-hub-alias: devhub
