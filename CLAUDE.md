@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a portable
-core plus thin adapters), **composite actions**, and **callable workflows** for
-Salesforce CI/CD pipelines.
+Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a
+strict, class-based singleton architecture with a single shared source tree),
+**composite actions**, and **callable workflows** for Salesforce CI/CD pipelines.
 
 ## Reference Pattern
 
@@ -14,22 +14,28 @@ From other repos, reference items using:
 - Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v1`
 - Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<workflow-name>.yml@v1`
 
-## TypeScript Actions (npm-workspaces monorepo)
+## TypeScript Actions (strict singleton architecture)
 
-`@actions/core` lives ONLY in the runtime/adapter layer; `packages/core` is
-portable and free of any runner API.
+All implementation lives in **`gforce-gha-src/`** — the only `.ts` file outside
+it is each action's entry point.
 
 | Path | Role |
 |------|------|
-| `packages/core` | Portable business logic: use cases (`actions/*`), GitHub services (`github-service/*`), validation, result/errors. No `@actions/*`. |
-| `packages/github-actions-runtime` | `@actions/core` adapter: `ActionsLogger`, `readRepoFromEnvironment`, the `runGitHubAction` loop. |
-| `.github/actions/<name>` | Thin adapter: `index.ts` (definition + guarded `run()`), `inputReader.ts`, `outputWriter.ts`, committed `dist/index.js`. |
+| `gforce-gha-src/actions/<name>` | Per-action `Orchestrator` singleton (`execute()` = numbered delegated steps) + `Validator` singleton (`inputValidation()`). |
+| `gforce-gha-src/clients/github` | Sub-clients (`GitHubBranchesClient`, `GitHubPullRequestsClient`) + `GitHubClient` facade; one thin wrapper per endpoint, error mapping only. |
+| `gforce-gha-src/services` | Shared singleton services: business workflows (`BranchSyncService`, `ReleasePrService`) + the sanctioned runner-API wrappers (`LoggerService`, `FileSystemService`, `GithubContextService`). |
+| `gforce-gha-src/libraries/salesforce` | Salesforce logic: `ApexTestSelectionService`, pure selectors, `package.xml` parsing, models. |
+| `gforce-gha-src/{types,utils,__tests__}` | Shared DTOs, pure helpers, and ALL tests (mirroring source; `__tests__/integration/` drives orchestrators end-to-end). |
+| `.github/actions/<name>` | `action.yml` + entry `index.ts` (getInput → `Orchestrator.execute` → setOutput/setFailed, zero logic) + per-action `package.json` + committed esbuild `dist/index.js`. |
 
-GitHub API calls are wrapped once per domain service (`BranchService`,
-`PullRequestService`) behind the composed `GitHubService` facade; each service is
-a singleton (`getInstance` cached / `newInstance` isolated / `resetInstance`),
-all sharing one `GitHubClient` (Octokit). `@octokit/rest` is a dependency of
-`packages/core` only.
+Every class is a singleton (`getInstance` / `resetInstance`; token-holding
+clients add a token-mismatch guard and `newInstance`). One shared Octokit backs
+all sub-clients (single rate-limit budget); services only ever touch the
+`GitHubClient` facade. Errors are throw-based (`ValidationError`,
+`GitHubApiError`) and caught in the entry; expected outcomes (e.g. merge
+conflict) are typed values. Tests: `method_scenario_expectedResult` naming,
+Given/When/Then, mock at the singleton boundary, 95% coverage gate (100%
+actual).
 
 ### `sync-branches`
 Fast-forward / merge / open a sync PR on conflict. `dry-run` defaults to `true`.

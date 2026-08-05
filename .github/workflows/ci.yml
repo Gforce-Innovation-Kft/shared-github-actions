@@ -35,7 +35,7 @@ jobs:
       - name: Bundle actions
         run: npm run bundle:all
 
-      - name: Test (per-package 90% coverage)
+      - name: Test (95% coverage gate, 100% actual)
         run: npm run test:all
 
       - name: Verify committed dist is current
@@ -53,7 +53,78 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
-          path: |
-            packages/*/coverage
-            .github/actions/*/coverage
+          path: gforce-gha-src/coverage
           if-no-files-found: ignore
+
+  # Execute every TypeScript action from its committed dist on a real runner:
+  # proves action.yml wiring, bundle integrity, and output names — the things
+  # unit tests can't see.
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Smoke sf-find-tests (offline, committed fixtures)
+        id: find-tests
+        uses: ./.github/actions/sf-find-tests
+        with:
+          package-xml: gforce-gha-src/__tests__/support/fixtures/package.xml
+          source-dir: gforce-gha-src/__tests__/support/fixtures/force-app
+
+      - name: Assert sf-find-tests outputs
+        env:
+          HAS_APEX: ${{ steps.find-tests.outputs.has-apex }}
+          TEST_COUNT: ${{ steps.find-tests.outputs.test-count }}
+          TESTS: ${{ steps.find-tests.outputs.tests }}
+        run: |
+          test "$HAS_APEX" = "true"
+          test "$TEST_COUNT" = "2"
+          test "$TESTS" = "InvoiceServiceTest InvoicesSelectorTest"
+
+      # source==target is rejected by input validation, so these two smoke over
+      # the PR's own refs and therefore only run on pull_request events.
+      - name: Smoke sync-branches (dry-run over the PR refs)
+        if: github.event_name == 'pull_request'
+        id: sync
+        uses: ./.github/actions/sync-branches
+        with:
+          source-branch: ${{ github.head_ref }}
+          target-branch: ${{ github.base_ref }}
+          dry-run: true
+          github-token: ${{ github.token }}
+
+      - name: Assert sync-branches outputs
+        if: github.event_name == 'pull_request'
+        env:
+          SYNC_DRY_RUN: ${{ steps.sync.outputs.dry-run }}
+          SYNC_ACTION: ${{ steps.sync.outputs.action }}
+          SYNC_SYNCED: ${{ steps.sync.outputs.synced }}
+        run: |
+          test "$SYNC_DRY_RUN" = "true"
+          test -n "$SYNC_ACTION"
+          test "$SYNC_SYNCED" = "false"
+
+      - name: Smoke create-release-pr (dry-run over the PR refs)
+        if: github.event_name == 'pull_request'
+        id: release-pr
+        uses: ./.github/actions/create-release-pr
+        with:
+          source-branch: ${{ github.head_ref }}
+          target-branch: ${{ github.base_ref }}
+          release-version: v0.0.0-smoke
+          dry-run: true
+          github-token: ${{ github.token }}
+
+      - name: Assert create-release-pr outputs
+        if: github.event_name == 'pull_request'
+        env:
+          PR_DRY_RUN: ${{ steps.release-pr.outputs.dry-run }}
+          PR_CREATED: ${{ steps.release-pr.outputs.created }}
+          PR_UPDATED: ${{ steps.release-pr.outputs.updated }}
+        run: |
+          test "$PR_DRY_RUN" = "true"
+          test "$PR_CREATED" = "false"
+          test "$PR_UPDATED" = "false"
