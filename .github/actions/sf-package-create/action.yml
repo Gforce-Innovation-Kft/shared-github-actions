@@ -32,6 +32,15 @@ inputs:
     description: "Skip validation. Draws on the 500/day limit instead of the 6/day one."
     required: false
     default: "false"
+  branch:
+    description: >-
+      Value for --branch. Empty (the default) omits the flag. Do NOT set this
+      casually: --branch does not merely label the version, it scopes DEPENDENCY
+      resolution to that branch, so a package whose dependencies resolve via
+      x.y.z.LATEST fails with NoReleaseVersionFoundForBranchError unless those
+      dependencies were themselves built on the same branch.
+    required: false
+    default: ""
   installation-key:
     description: "Installation key protecting the package. Empty (the default) passes --installation-key-bypass."
     required: false
@@ -143,6 +152,7 @@ runs:
         CODE_COVERAGE: ${{ inputs.code-coverage }}
         SKIP_VALIDATION: ${{ inputs.skip-validation }}
         INSTALL_KEY: ${{ inputs.installation-key }}
+        BRANCH: ${{ inputs.branch }}
       run: |
         set -euo pipefail
 
@@ -155,9 +165,12 @@ runs:
           --json
         )
 
-        # GITHUB_REF_NAME is the branch for push/PR events and the tag name for
-        # tag pushes; either way it is the ref this build came from.
-        [ -n "${GITHUB_REF_NAME:-}" ] && ARGS+=(--branch "$GITHUB_REF_NAME")
+        # Opt-in only. Passing the current ref here (the obvious thing to do)
+        # scopes dependency resolution to that branch, so any package whose
+        # dependencies use x.y.z.LATEST dies with
+        # NoReleaseVersionFoundForBranchError. The commit is already recorded
+        # via --tag, so provenance does not need --branch.
+        [ -n "$BRANCH" ] && ARGS+=(--branch "$BRANCH")
 
         # The CLI rejects --code-coverage together with --skip-validation.
         if [ "$SKIP_VALIDATION" = "true" ]; then
@@ -189,9 +202,20 @@ runs:
 
         node <<'NODE' >> "$GITHUB_OUTPUT"
         const fs = require('node:fs');
+        const parsed = JSON.parse(fs.readFileSync('sf-create.json', 'utf8'));
         // `create` returns an object; `create report` returns an array.
-        const raw = JSON.parse(fs.readFileSync('sf-create.json', 'utf8')).result ?? {};
+        const raw = parsed.result ?? {};
         const r = Array.isArray(raw) ? (raw[0] ?? {}) : raw;
+
+        // A command-level failure (bad flags, unresolvable dependency, auth)
+        // returns {status, name, message} with NO result at all. Without this
+        // the run reports a useless status of "unknown" and hides the reason.
+        if (!r.Status && parsed.status && parsed.status !== 0) {
+          const name = parsed.name ?? parsed.code ?? 'SalesforceCliError';
+          const message = String(parsed.message ?? 'no message').replace(/\n/g, '%0A');
+          process.stderr.write(`::error::${name}: ${message}\n`);
+          process.exit(1);
+        }
 
         console.log(`request-id=${r.Id ?? ''}`);
         console.log(`status=${r.Status ?? ''}`);
