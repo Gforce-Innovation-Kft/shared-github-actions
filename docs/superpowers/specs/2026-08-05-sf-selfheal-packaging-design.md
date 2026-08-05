@@ -70,10 +70,19 @@ degrades badly:
    Hub, joined to `Package2VersionCreateRequest` by request id. The deterministic collector
    queries it on every failure. Most engineers never do — which is exactly why manual triage
    is slow.
-2. **Always pass `--tag <git-sha>`.** With the commit SHA recorded on every create, "what
-   changed since the last successful version of this package" becomes a query
-   (`Package2Version` → last successful record → its `Tag`) rather than guesswork. Without it,
-   the delta step (L3) is unreliable forever.
+2. **Record the commit ↔ version correlation in both directions.**
+   - **SF → git:** always pass `--tag <git-sha>` and `--branch <branch>` on create, so
+     `Package2Version.Tag` carries the commit.
+   - **git → SF:** on every *successful* create, push an annotated git tag
+     `pkg/<package>/<versionNumber>` at that commit, with the version id and metadata in the
+     tag message.
+
+   Either record alone answers "what changed since the last successful version". Together they
+   are a consistency check: **disagreement between them is itself diagnostic** (a version was
+   created outside CI, or a tag push failed) and is reported as a finding rather than silently
+   resolved. Git tags are instant and work without Dev Hub auth; the Dev Hub is the authority.
+   Both are immutable and written once at creation — this is redundancy, not mutable state.
+   Requires `contents: write` on the packaging job.
 
 ---
 
@@ -322,7 +331,11 @@ interface EvidenceBundle {                 // the durable contract
     errors: Package2VersionCreateRequestError[]; // ← the real message
     project: SfdxProjectSnapshot;                // aliases, deps, ancestors, versionNumber
     dependencies: ResolvedDependency[];
-    lastSuccess?: { versionId: string; tag: string; createdAt: string; };
+    lastSuccess?: {
+      sha: string; versionId: string; versionNumber: string; createdAt: string;
+      source: 'gitTag' | 'devHub' | 'both';   // 'both' means they agreed
+      divergence?: { gitTagSha: string; devHubSha: string };  // reported as a finding
+    };
     limits: LimitsSnapshot;
     toolingVersions: { cli: string; plugins: Record<string,string>; };
   };
@@ -715,17 +728,19 @@ Requirements:
 jobs:
   package:
     uses: Gforce-Innovation-Kft/sf-selfheal/.github/workflows/sf-package-create.yml@v1
-    with:
-      package: my-package
-      tag: ${{ github.sha }}          # required — enables delta analysis
-    secrets:
-      sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}
+    secrets: inherit
     permissions:
-      contents: read
+      contents: write        # push the pkg/<package>/<version> tag
 ```
 
-On failure the job uploads `sf-selfheal-evidence-<run_number>` and exits non-zero. The
-packaging job never calls the AI and never depends on its availability.
+**Inputs are derived, not passed.** `tag` ← `github.sha`, `branch` ← the ref, `package` ← the
+default `packageDirectories` entry (required as an input only for multi-package projects).
+`package`, `max-action-class` and `dry-run` remain optional overrides. An input that must be
+supplied correctly on every call is a defect waiting to happen.
+
+On success the job pushes the annotated version tag. On failure it uploads
+`sf-selfheal-evidence-<run_number>` and exits non-zero. The packaging job never calls the AI and
+never depends on its availability.
 
 ### 15.2 Healer side
 
@@ -981,3 +996,5 @@ agent proposal; measurable reduction in mean time to diagnosis.
 | D12 | Production boundary is allowlist + runtime assertion + **credential unavailability** | The third gate holds even if policy and prompt are fully compromised |
 | D13 | Package install into scratch and allowlisted sandboxes is permitted (A1/A3) | Needed to verify dependency and install-time failures; prod stays unreachable |
 | D14 | Salesforce-side diff is two tools: version content (always) + metadata via scratch orgs (tier 3) | Catches the "nothing in the repo changed" class without paying for it every run |
+| D15 | Correlation recorded both ways: `Package2Version.Tag` **and** an annotated git tag `pkg/<package>/<version>` | Git is instant and offline; the Dev Hub is authoritative; disagreement is itself a finding |
+| D16 | Workflow inputs are derived from context wherever possible; overrides stay optional | Every required input is a place the caller can be wrong |
