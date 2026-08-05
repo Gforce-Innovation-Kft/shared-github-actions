@@ -15,9 +15,9 @@ commit SHA — avoid `@main` in production callers).
 
 ## TypeScript Actions
 
-Thin Node20 adapters over portable business logic in `packages/`. Each ships a
-committed `dist/index.js`. Full input/output lists live in each `action.yml`;
-runnable callers are in [`examples/`](examples).
+Thin Node20 entry points over a strict, class-based singleton architecture in
+`gforce-gha-src/`. Each ships a committed `dist/index.js`. Full input/output
+lists live in each `action.yml`; runnable callers are in [`examples/`](examples).
 
 ### `sync-branches`
 
@@ -124,9 +124,11 @@ to `@v2`). The release procedure for maintainers is in
 npm-workspaces monorepo:
 
 ```text
-packages/core                      # portable business logic + GitHub services (no @actions/*)
-packages/github-actions-runtime    # @actions/core adapter: logger, repo-from-env, runGitHubAction
-.github/actions/<name>             # thin TypeScript action adapters (committed dist/)
+gforce-gha-src/                    # ALL TypeScript implementation (single source of truth):
+                                   #   actions/<name>/ (Orchestrator + Validator singletons),
+                                   #   clients/github/ (sub-clients + facade), services/,
+                                   #   libraries/salesforce/, selectors, utils, __tests__/
+.github/actions/<name>             # action.yml + entry index.ts + committed esbuild dist/index.js
 .github/actions/get-aws-secret     # composite actions
 .github/workflows                  # CI + reusable workflows
 examples/                          # runnable caller workflows
@@ -142,8 +144,8 @@ how to add the next action.
 ```bash
 npm ci                  # install workspaces (Node 20+)
 npm run all             # format:check + lint + typecheck + bundle + test + dist:verify
-npm run test:all        # all workspace tests (per-package 90% coverage gate)
-npm run bundle:all      # rebuild every action's dist/index.js
+npm run test:all        # all workspace tests (95% coverage gate, 100% actual)
+npm run bundle:all      # rebuild every action's dist/index.js (esbuild)
 npm run typecheck:all   # tsc --noEmit across workspaces
 ```
 

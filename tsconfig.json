@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["packages/*/src", ".github/actions/*/src"]
+  "include": ["gforce-gha-src", ".github/actions/*/index.ts"]
 }

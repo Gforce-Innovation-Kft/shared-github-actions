@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": "."
+  },
+  "include": [
+    "actions",
+    "clients",
+    "libraries",
+    "services",
+    "selectors",
+    "models",
+    "types",
+    "utils",
+    "__tests__"
+  ]
+}

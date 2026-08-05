@@ -1,153 +1,159 @@
 # Authoring a TypeScript Action
 
-Actions in this repo follow one template: **business logic and input/output
-shaping go in `@gforce/core`; the GitHub Actions plumbing goes in
-`@gforce/github-actions-runtime`; the action is a thin adapter** that names four
-collaborators and hands them to `runGitHubAction`. See
-[architecture.md](./architecture.md) for the why.
+Actions follow one template: **all implementation lives in `gforce-gha-src/`**
+(Validator + Orchestrator per action, business logic in services, API wrappers
+in clients); the runner folder holds only a plain-function entry point, the
+manifest, and the committed bundle. See [architecture.md](./architecture.md)
+for the layer rules and the why.
+
+Before writing code, map every piece of work to a layer:
+
+| Logic type | Where it lives |
+| --- | --- |
+| Read inputs, set outputs | `.github/actions/<name>/index.ts` (plain function only) |
+| Coordinate steps end-to-end | `gforce-gha-src/actions/<name>/orchestrator.ts` |
+| Validate and sanitize inputs | `gforce-gha-src/actions/<name>/validator.ts` |
+| Business workflow | `gforce-gha-src/services/<name>-service.ts` (or `libraries/<ctx>/services/`) |
+| GitHub REST wrappers | `gforce-gha-src/clients/github/<domain>/` — one method per endpoint |
+| File I/O | `FileSystemService` |
+| Logging | `LoggerService` |
+| Runner env (repo slug) | `GithubContextService` |
+| Pure filter/transform over data | `selectors/` (or `libraries/<ctx>/selectors/`) |
+| Shared DTOs | `gforce-gha-src/types/index.ts` |
+| External-system logic (Salesforce, …) | `gforce-gha-src/libraries/<context>/` |
+
+**Before implementing anything, ask: does this already exist in
+`gforce-gha-src`?** If two actions need the same logic, extract a shared
+service.
 
 ## Steps to add a new action
 
-1. **Add the use case + action seam to core** (`packages/core/src/actions/<name>/`):
-   - `types.ts` — request/result/deps **plus** `Raw*Inputs` / `Validated*Inputs`.
-   - `<name>.ts` — the `orchestrate`-style use case returning `Result<T>`, **and**
-     a `run<Name>Action(input, context)` seam that maps `Validated*Inputs` +
-     `ActionContext` onto the use case.
-   - `validate<Name>Inputs.ts` — `Raw*Inputs -> Validated*Inputs` (reuses the
-     shared validation helpers).
-   Reuse existing `GitHubService` (facade) methods; only add a new method to the
-   relevant per-domain `<domain>Service.ts` (the port + its `Octokit*Service`
-   live in that one file) and the facade if no wrapper exists yet — or a new
-   `github-service/<domain>/<domain>Service.ts` if it's a new area (see
-   "Extending a GitHub service domain" below). Export everything from
-   `packages/core/src/index.ts`. Add core unit tests.
+1. **Types** — add `Validated<Name>Inputs` (+ request/result DTOs) to
+   `gforce-gha-src/types/index.ts` (external-system shapes go in
+   `libraries/<ctx>/models/types.ts`).
 
-2. **Scaffold the action** under `.github/actions/<name>/`:
-   - `package.json` — name `@gforce/<name>`, deps `@actions/core`,
-     `@gforce/core: "*"`, `@gforce/github-actions-runtime: "*"` (no direct
-     `@octokit/rest`); scripts `typecheck` / `test` / `bundle` (copy an existing action).
-   - `action.yml` — `using: node20`, `main: dist/index.js`, kebab-case inputs/outputs.
-   - `tsconfig.json` — `extends ../../../tsconfig.base.json`, `noEmit`.
-   - `jest.config.js` — copy an existing action (maps `@gforce/core` **and**
-     `@gforce/github-actions-runtime` to source, per-package 90% threshold).
-   - `src/` — three template files (`index`, `inputReader`, `outputWriter`).
-     `index.ts` builds the `GitHubActionDefinition`, exposes `run(overrides?)`
-     (which calls `runGitHubAction`), and self-invokes under a
-     `require.main === module` guard so importing it in tests doesn't run it.
+2. **Validator** — `gforce-gha-src/actions/<name>/validator.ts`: a `Validator`
+   singleton whose `inputValidation(rawInputs: unknown)` reads the kebab-case
+   keys with `readStringInput` and normalizes with the shared helpers
+   (`requireNonEmpty`, `parseBoolean`, `parseEnum`, `parseList`). All input
+   validation lives here — never in the entry or the Orchestrator.
 
-3. **Register the workspace.** Add `.github/actions/<name>` to the root
-   `package.json` `workspaces` array (it is an explicit list — composite actions
-   have no `package.json`, so we don't glob `.github/actions/*`). Run `npm install`.
+3. **Service** — the business workflow as a singleton service. GitHub calls go
+   through `GitHubClient.getInstance(token)` (the facade); add missing
+   endpoints to the matching sub-client first (one thin wrapper per endpoint,
+   error mapping only) and expose them via the facade. Log through
+   `LoggerService`; touch files through `FileSystemService`.
 
-4. **Tests** (`__tests__/` + `__integration__/`): `inputReader`, `outputWriter`,
-   and a `main` test asserting the definition is wired from the shared pieces and
-   that `run()` delegates to `runGitHubAction`. The integration test drives `run()`
-   end-to-end with a fake service injected as a context override and asserts
-   `dist/index.js` exists. (Validators, the run seam, the logger, repo parsing,
-   and `runGitHubAction` are tested in core / the runtime package.)
+4. **Orchestrator** — `gforce-gha-src/actions/<name>/orchestrator.ts`: an
+   `Orchestrator` singleton whose `execute(rawInputs: unknown)` reads as a
+   numbered list of delegated steps (validate → resolve context → service
+   call). No loops, no regex, no transformations, no API/file calls here.
 
-5. **Bundle, then validate.** `npm run bundle -w @gforce/<name>` then
-   `npm run all`. Commit `dist/index.js` (the pre-commit hook keeps it in sync).
+5. **Entry + manifest** — `.github/actions/<name>/`:
+   - `index.ts` — the spec template: `core.getInput` per input, one
+     `Orchestrator.getInstance().execute({...})` call, `core.setOutput` per
+     output, `catch` → `core.setFailed`. Zero logic.
+   - `package.json` — copy an existing action's: `@gforce/<name>`, esbuild
+     `build` (+ `bundle` alias), `--passWithNoTests` test, `typecheck -p
+     ../tsconfig.json`, `"gforce-gha-src": "file:../../../gforce-gha-src"`.
+   - `action.yml` — `using: node20`, `main: dist/index.js`, kebab-case
+     inputs/outputs, least-privilege permissions documented in a comment.
+   - Register the folder in the root `package.json` `workspaces` and append a
+     `--prefix` step to `build:all` in `.github/actions/package.json`.
 
-6. **Document.** Add an example caller to `examples/<name>.yml` and a row to the
-   README / CLAUDE action tables. State the **least-privilege permissions** the
-   action needs (e.g. `contents: read` vs `write`, `pull-requests: write`).
+6. **Tests** — under `gforce-gha-src/__tests__/`, mirroring the source paths:
+   - `method_scenario_expectedResult` names; `// Given` / `// When` (exactly
+     one call) / `// Then` sections.
+   - Mock at the singleton boundary
+     (`jest.spyOn(Service.getInstance(), 'method')`); `resetInstance()` for
+     every touched singleton in `afterEach`; assert spies with
+     `toHaveBeenCalledWith`; typed errors via `toBeInstanceOf` +
+     `toThrow('<message>')`.
+   - Add `__tests__/integration/<name>.integration.test.ts` driving
+     `Orchestrator.execute()` end-to-end and asserting `dist/index.js` exists.
+   - Coverage gate is 95% on every metric; keep it at 100%.
 
-## Action skeleton (copy/paste)
+7. **Bundle, then validate** — `npm run bundle:all`, then **`npm run all`**.
+   Commit `dist/index.js` (the pre-commit hook keeps it in sync; CI
+   `dist:verify` fails stale bundles).
 
-The adapter is always these three files. Only the names and the four collaborators
-change between actions.
+8. **Document** — example caller in `examples/<name>.yml`, rows in the README
+   and CLAUDE.md action tables, least-privilege permissions stated. Consider a
+   CI smoke step in `ci.yml` executing the committed bundle.
 
-```text
-.github/actions/<name>/src/
-  index.ts        # definition + run() + require.main guard (below)
-  inputReader.ts  # core.getInput(...) -> Raw*Inputs  (type imported from @gforce/core)
-  outputWriter.ts # result -> core.setOutput(...)     (kebab-case keys)
-```
+## Entry skeleton (copy/paste)
 
 ```ts
-// src/index.ts — the entire adapter wiring
-import {
-  run<Name>Action,
-  validate<Name>Inputs,
-  type ActionContext,
-  type Raw<Name>Inputs,
-  type Validated<Name>Inputs,
-  type <Name>Result,
-} from '@gforce/core';
-import { runGitHubAction, type GitHubActionDefinition } from '@gforce/github-actions-runtime';
-import { readInputs } from './inputReader';
-import { writeOutputs } from './outputWriter';
+// .github/actions/<name>/index.ts — the ONLY .ts file outside gforce-gha-src
+import * as core from '@actions/core';
 
-export const <name>Action: GitHubActionDefinition<
-  Raw<Name>Inputs,
-  Validated<Name>Inputs,
-  <Name>Result
-> = {
-  readInputs,
-  validateInputs: validate<Name>Inputs,
-  execute: run<Name>Action,
-  writeOutputs,
-};
+import { Orchestrator } from '../../../gforce-gha-src/actions/<name>/orchestrator';
 
-/** Action entrypoint. `overrides` is for tests; production passes nothing. */
-export function run(overrides?: Partial<ActionContext>): Promise<void> {
-  return runGitHubAction(<name>Action, overrides);
+async function run(): Promise<void> {
+  try {
+    const result = await Orchestrator.getInstance().execute({
+      'some-input': core.getInput('some-input', { required: true }),
+      'other-input': core.getInput('other-input'),
+    });
+    core.setOutput('some-output', result.someOutput);
+  } catch (error) {
+    core.setFailed(error instanceof Error ? error.message : String(error));
+  }
 }
 
-/* istanbul ignore next -- runner-only entry guard; tests import and call run() directly */
-if (require.main === module) {
-  void run();
+void run();
+```
+
+## Singleton skeleton
+
+```ts
+export class MyService {
+  private static instance: MyService;
+
+  private constructor() {}
+
+  public static getInstance(): MyService {
+    if (!MyService.instance) {
+      MyService.instance = new MyService();
+    }
+    return MyService.instance;
+  }
+
+  // public methods here
+
+  public static resetInstance(): void {
+    MyService.instance = undefined as unknown as MyService;
+  }
 }
 ```
 
-## Extending a GitHub service domain
-
-GitHub API wrappers live in `packages/core/src/github-service/<domain>/`, one file
-per domain holding **both** the port and its single Octokit implementation:
-
-```text
-github-service/<domain>/
-  <domain>Service.ts   # export interface <Domain>Service { ... }
-                       # export class Octokit<Domain>Service implements <Domain>Service
-                       #   - constructor(octokit) — injectable for fakes
-                       #   - static getInstance/newInstance/resetInstance (wrap GitHubClient)
-                       #   - one method per API call, via runOctokit(...)
-  types.ts             # value objects for the domain
-```
-
-- Reuse `client/GitHubClient` (the only `new Octokit(...)`) and
-  `client/octokitSupport` (`runOctokit`, `toGitHubApiError`) — don't re-roll error
-  wrapping or client construction.
-- Fold a new domain into the facade `github/gitHubService.ts` (`GitHubService
-  extends ...`, plus delegating methods on `OctokitGitHubService`).
-- Service interfaces stay covered (the impl is colocated); only a pure
-  interface-only stub is excluded in `jest.config.js`.
+Token-holding clients use `getInstance(token)` with a token-mismatch guard plus
+`newInstance(token)` for isolated instances — copy `GitHubBranchesClient`.
 
 ## Rules (also for AI agents)
 
-- **No business logic in the entrypoint.** `index.ts` only wires the
-  `GitHubActionDefinition` and delegates the loop to `runGitHubAction`; the logic
-  lives in core and the run loop in the runtime package.
-- **Never import `@actions/core` (or any runner API) in `packages/core`.** Anything
-  `@actions/*`-bound belongs in `@gforce/github-actions-runtime`. Pure helpers
-  (e.g. `parseRepoRef`) stay in core; only the env read lives in the runtime.
-- **One wrapper per GitHub API call**, on the relevant domain's `Octokit*Service`
-  class in `<domain>Service.ts` (`@octokit/rest` is touched nowhere else). Reuse
-  it; don't call Octokit from a use case or adapter.
-- **Build the service via `OctokitGitHubService.getInstance(token)`** (the runtime
-  does this for you) — don't `new Octokit()` in an adapter. Use
-  `newInstance`/`resetInstance` only for test isolation.
-- **Never skip tests or lower the 90% per-package threshold.** Bundle before
-  testing so the integration bundle check passes.
+- **No business logic in the entry point** — `index.ts` is getInput →
+  `Orchestrator.execute` → setOutput/setFailed, nothing else.
+- **Never `any`**, no non-null assertions, no type assertions (the singleton
+  reset and test-only Octokit fakes are the exceptions). Explicit return types
+  on all exported/public functions. `readonly` by default; `undefined` over
+  `null`; string-literal unions over `enum`.
+- **One wrapper per GitHub endpoint** on the matching sub-client;
+  `@octokit/rest` is touched nowhere else. Services use the `GitHubClient`
+  facade — never a raw Octokit.
+- **Clients never log; services never call `core.getInput`/`setOutput`.**
+- Validate everything in `Validator.inputValidation()`; mask secrets with
+  `LoggerService.setSecret`; least-privilege `action.yml` permissions.
+- **Never skip tests or lower the 95% gate.** Bundle before testing so the
+  integration bundle check passes.
 - **Always commit `dist/`; never commit `node_modules/`.**
 - **Don't modify unrelated actions** when adding a new one.
 
 ## Local commands
 
 ```bash
-npm install              # link workspaces + install husky
-npm run all              # format:check + lint + typecheck + bundle + test + dist:verify
-npm run test -w @gforce/<name>      # one package's tests + coverage
-npm run bundle -w @gforce/<name>    # rebuild one action's dist/index.js
+npm ci                            # link workspaces + install husky
+npm run all                       # format:check + lint + typecheck + bundle + test + dist:verify
+npm run test -w gforce-gha-src    # unit (coverage) + integration suites
+npm run bundle:all                # rebuild every action's dist/index.js
 ```
