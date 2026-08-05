@@ -203,7 +203,9 @@ so their cost is paid only when relevant.
 ### 3.3 Runtime
 
 Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), model `claude-opus-5`, adaptive thinking,
-`effort: high` for triage-adjacent work and `xhigh` for full investigation.
+`effort: high` for triage-adjacent work and `xhigh` for full investigation. Preinstalled in the
+`sf-ci` image alongside the Claude Code CLI — the **CLI is for human debugging inside the
+container only** and is never invoked by any automated path.
 
 Four non-negotiable configuration points:
 
@@ -496,9 +498,9 @@ interface ToolDescriptor<I, O> {
 
 | Bundle | Representative tools | Class |
 |---|---|---|
-| `sf.package` | `versionCreateReport`, `versionList`, `versionReport`, `ancestryList`, `dependencyResolve`, `versionCreate`, `versionDelete` | A0 except `versionCreate` (A4), `versionDelete` (A4) |
-| `sf.org` | `limitsRead`, `scratchCreate`, `scratchDelete`, `authStatus`, `soqlTooling` | A0 / A1 |
-| `sf.metadata` | `deployValidate`, `apexCompile`, `testRun`, `manifestLint` | A1 |
+| `sf.package` | `versionCreateReport`, `versionList`, `versionReport`, `ancestryList`, `dependencyResolve`, `lastSuccessfulVersion`, `versionContentDiff`, `versionCreate`, `versionDelete` | A0 except `versionCreate` (A4), `versionDelete` (A4) |
+| `sf.org` | `limitsRead`, `scratchCreate`, `scratchDelete`, `authStatus`, `soqlTooling`, `packageInstall` | A0 / A1; `packageInstall` A1 (scratch) or A3 (allowlisted sandbox), gated by §11.3a |
+| `sf.metadata` | `deployValidate`, `apexCompile`, `testRun`, `manifestLint`, `metadataDiffAcrossScratchOrgs` | A1 (`metadataDiffAcrossScratchOrgs` consumes 2 scratch orgs — budget-gated, tier 3 only) |
 | `git.read` | `log`, `diffRange`, `showFile`, `blame`, `lastSuccessSha` | A0 |
 | `repo.write` | `applyStructuredEdit`, `commitToBranch`, `openPullRequest` | A2 / A3 |
 | `gh` | `getRun`, `getJobLogs`, `comment`, `rerunWorkflow` | A0 / A2 |
@@ -567,7 +569,7 @@ Autonomy is a property of the **action**, not of the model's confidence.
 | **A2** | Propose — writes only to healer-owned refs | healer branch + PR, PR comment | always allowed |
 | **A3** | Mutate — writes to the failing branch | commit to feature branch | non-protected branch **and** path allowlist **and** structural diff validation **and** not a fork |
 | **A4** | Consume quota — scarce, semi-irreversible | `package version create`, `version delete` (unpromoted only) | verifier passed **and** budget headroom **and** limits headroom |
-| **A5** | Forbidden | promote, production deploy, delete released versions, write to protected branches, edit `.github/workflows/**`, `policy/**`, `tools/**`, touch secrets | never, unconditionally |
+| **A5** | Forbidden | promote, **any** production action, delete released versions, write to protected branches, edit `.github/workflows/**`, `policy/**` (incl. `installable-orgs.yml`), `tools/**`, touch secrets | never, unconditionally |
 
 ### 11.2 Path allowlist for A3
 
@@ -587,6 +589,22 @@ within `sfdx-project.json`, is rejected by the structural validator and downgrad
 `sf package version promote` is **A5 for the agent, always**. The agent may *prepare* a
 promotion — open the PR, draft the dispatch payload, assemble the evidence — but the GitHub
 environment approval gate executes it. This holds even at v3.
+
+### 11.3a Org boundary — three gates, all must pass
+
+Package **install** into a scratch org or an allowlisted sandbox is an allowed action (A1 for
+scratch, A3 for sandbox). Production is unreachable. The boundary is enforced three times:
+
+1. **Allowlist** — the target Org ID must appear in `policy/installable-orgs.yml`. Deny by
+   default; a new org is unusable until someone commits it.
+2. **Runtime assertion** — a live query must confirm `IsSandbox = true` or that the org is a
+   scratch org. An allowlisted ID later repurposed as production fails here.
+3. **Credential unavailability** — the healer's OIDC role has **no IAM permission on the
+   production secret path**. This is the primary control: a total compromise of the policy
+   engine and the prompt still cannot produce a production credential, because it does not
+   exist in that execution context. Gates 1 and 2 are defence in depth on top of it.
+
+`policy/installable-orgs.yml` is an A5 path — no tool can read or write it.
 
 ### 11.4 Secrets
 
@@ -814,8 +832,10 @@ Candidate order, chosen so each reuses the prior one's tools:
 | 2 | `deploy-validation` | `sf.metadata`, `sf.org`, verifiers | deploy-error taxonomy |
 | 3 | `scratch-org-management` | `sf.org` | shape/feature taxonomy, expiry handling |
 | 4 | `org-health-check` | `sf.org`, `knowledge` | scheduled (not failure-triggered) entry |
-| 5 | `dependency-management` | `sf.package` | cross-package graph analysis |
-| 6 | `release-management` | all | orchestration across skills |
+| 5 | `promotion-preparation` | `sf.package`, all verifiers | assembles the approval evidence pack; **never executes** the promotion (A5) |
+| 6 | `findings-signal` | `knowledge` | `FindingsSink` adapters — PR comment always, Slack/Teams/Jira optional |
+| 7 | `dependency-management` | `sf.package` | cross-package graph analysis |
+| 8 | `release-management` | all | orchestration across skills |
 
 **Cross-skill knowledge sharing** is via the shared case corpus and shared tool bundles.
 Retrieval is filtered by skill by default but can be widened — a Dev Hub quota failure looks
@@ -957,3 +977,7 @@ agent proposal; measurable reduction in mean time to diagnosis.
 | D8 | Playbooks only via human-merged PR | Prevents a self-amplifying error source |
 | D9 | v0 ships with no LLM in the fix path | Forces the deterministic tier to carry its own weight |
 | D10 | Promotion is A5 forever | Human approval gate is non-negotiable |
+| D11 | Agent SDK drives the loop; Claude Code CLI ships in the image for humans only | Keeps the no-bash property enforced in code, not in an allowlist |
+| D12 | Production boundary is allowlist + runtime assertion + **credential unavailability** | The third gate holds even if policy and prompt are fully compromised |
+| D13 | Package install into scratch and allowlisted sandboxes is permitted (A1/A3) | Needed to verify dependency and install-time failures; prod stays unreachable |
+| D14 | Salesforce-side diff is two tools: version content (always) + metadata via scratch orgs (tier 3) | Catches the "nothing in the repo changed" class without paying for it every run |
