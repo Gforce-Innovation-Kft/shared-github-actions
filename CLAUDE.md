@@ -88,6 +88,31 @@ Generates a delta `package.xml` between two git refs with sfdx-git-delta (instal
 **Inputs:** `from-ref` (required), `to-ref` (default `HEAD`), `output-dir` (default `delta`), `source-dir` (default `force-app`), `generate-delta` (default `false`)
 **Outputs:** `package-path`, `has-changes`, `component-count`
 
+### `sf-package-create` (`.github/actions/sf-package-create/action.yml`)
+
+Creates **one** 2GP package version: resolves the package from `sfdx-project.json`, refuses to
+start unless the Dev Hub has headroom, runs `sf package version create`, pushes an annotated
+`pkg/<package>/<versionNumber>` provenance tag, and on failure queries
+`Package2VersionCreateRequestError` so Salesforce's own message lands in the job log.
+
+Preflight checks the limit the run will actually spend: `Package2VersionCreates` (6/day) normally,
+`Package2VersionCreatesWithoutValidation` (500/day) when `skip-validation` is true — checking the
+wrong one blocks a build against quota it never consumes.
+
+**Inputs:** `package` (falls back to the single or `default: true` entry), `dev-hub-alias` (default `devhub`), `wait-minutes` (default `60`), `code-coverage` (default `true` — set `false` for packages with no Apex tests), `skip-validation`, `installation-key` (empty ⇒ `--installation-key-bypass`), `preflight-min-headroom` (default `2`), `push-tag` (default `true`), `evidence-path`
+**Outputs:** `version-id` (`04t`), `package-version-id` (`05i`), `version-number`, `request-id` (`08c`), `status`, `git-tag`
+**Caller permissions:** `contents: write` (tag push), or `contents: read` when `push-tag: false`
+
+It does **not** resolve dependency order or install anything — callers own that. `wait-minutes` is
+a hard ceiling: if the build is still running when it expires the step fails and prints the
+`sf package version create report` command to resume, rather than waiting a second time.
+
+Scope note: the plan in `docs/superpowers/plans/2026-08-05-part1-package-create-action.md` also
+specified a TypeScript twin (`sf-package-create-node`), a `sf-package-create.yml` reusable
+workflow and a benchmark. **None were built** — only the composite action exists. The workspace
+digest that supported that comparison was removed; `--tag "$GITHUB_SHA"` already identifies the
+packaged content in CI.
+
 ## Reusable Workflows
 
 ### `salesforce-code-analyzer` (`.github/workflows/salesforce-code-analyzer.yml`)
