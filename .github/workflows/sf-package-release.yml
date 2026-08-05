@@ -34,6 +34,15 @@ on:
         required: false
         default: "config/project-scratch-def.json"
         type: string
+      source-dirs:
+        description: >-
+          Space-separated package directories to deploy during validation. Empty
+          deploys every packageDirectories entry, which fails if an unrelated
+          entry needs a `replacements` env var. Include the package under
+          release AND its dependency directories.
+        required: false
+        default: ""
+        type: string
       run-validate:
         description: "Run the scratch-org validation job. Set false to skip it when scratch org capacity is exhausted."
         required: false
@@ -122,19 +131,39 @@ jobs:
 
       - name: Push source
         shell: bash
-        run: sf project deploy start --target-org release-check --wait 60
+        env:
+          SOURCE_DIRS: ${{ inputs.source-dirs }}
+        run: |
+          set -euo pipefail
+          ARGS=(--target-org release-check --wait 60)
+          # Word splitting is intended — source-dirs is a space-separated list.
+          # shellcheck disable=SC2086
+          for DIR in ${SOURCE_DIRS:-}; do
+            [ -d "$DIR" ] || { echo "::error::source-dirs entry '$DIR' does not exist." >&2; exit 1; }
+            ARGS+=(--source-dir "$DIR")
+          done
+          sf project deploy start "${ARGS[@]}"
 
       - name: Assign permission sets
         shell: bash
+        env:
+          SOURCE_DIRS: ${{ inputs.source-dirs }}
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
+          # Only look where we actually deployed, so unrelated package dirs do
+          # not produce warnings for permission sets that were never pushed.
+          # Word splitting is intended — source-dirs is a space-separated list.
+          # shellcheck disable=SC2206
+          SEARCH_ROOTS=(${SOURCE_DIRS:-.})
           FOUND=0
-          for PS_FILE in **/permissionsets/*.permissionset-meta.xml; do
-            FOUND=1
-            PS_NAME=$(basename "$PS_FILE" .permissionset-meta.xml)
-            sf org assign permset --name "$PS_NAME" --target-org release-check \
-              || echo "::warning::Could not assign permission set $PS_NAME"
+          for ROOT in "${SEARCH_ROOTS[@]}"; do
+            for PS_FILE in "$ROOT"/**/permissionsets/*.permissionset-meta.xml; do
+              FOUND=1
+              PS_NAME=$(basename "$PS_FILE" .permissionset-meta.xml)
+              sf org assign permset --name "$PS_NAME" --target-org release-check \
+                || echo "::warning::Could not assign permission set $PS_NAME"
+            done
           done
           [ "$FOUND" -eq 1 ] || echo "::notice::No permission sets found to assign."
 
