@@ -55,26 +55,78 @@ flowchart TB
 
 ## 2. The correlation key — the spine of the whole system
 
-Everything downstream depends on being able to answer *"what changed since this package last
-built successfully?"* That is only answerable if every create writes the commit back to
-Salesforce.
+Everything downstream depends on answering *"what changed since this package last built
+successfully?"* The correlation is written **in both directions**, at creation time, and never
+mutated afterwards.
 
 ```mermaid
 flowchart LR
-  C["git commit<br/>abc1234"] -->|"--tag abc1234<br/>--branch feature/x"| V["Package2Version<br/>0Ho... / 04t...<br/>Tag = abc1234<br/>Branch = feature/x"]
-  V -->|"query: last successful<br/>version for this package"| L["lastSuccessSha<br/>= 9f8e7d6"]
-  L --> D["git diff 9f8e7d6..abc1234"]
-  L --> M["metadata diff<br/>scratch(9f8e7d6) vs scratch(abc1234)"]
-  L --> P["version content diff<br/>deps · ancestor · coverage · API version"]
+  C["git commit<br/>abc1234"]
+  V["Package2Version<br/>04t… · 1.2.0.4<br/>Tag = abc1234<br/>Branch = feature/x"]
+  T["git tag (annotated)<br/>pkg/my-package/1.2.0.4<br/>→ abc1234"]
+
+  C -->|"create --tag SHA --branch BR"| V
+  V -->|"on success, push tag"| T
+  T -.->|"git: version → commit"| C
+  V -.->|"DevHub: version → commit"| C
 ```
 
-**The rule:** every `sf package version create`, in every workflow, always passes
-`--tag ${{ github.sha }}` and `--branch <branch>`. No exceptions. A create without a tag is a
-version the system can never reason about later.
+Two independent records of the same fact:
 
-**No duplicate bookkeeping.** The Dev Hub is the source of truth — we do *not* maintain a
-parallel `last-success.json` in the repo that can drift. If a legacy version has no `Tag`, the
-system says so explicitly in the findings rather than guessing.
+| Direction | Record | Written by | Read when |
+|---|---|---|---|
+| SF → git | `Package2Version.Tag = <sha>` | `sf package version create --tag` | authority; always available if the Dev Hub is reachable |
+| git → SF | annotated tag `pkg/<package>/<version>` → commit | packaging job, after a successful create | instant, offline, human-browsable in the GitHub UI |
+
+**The annotated tag carries the metadata in its message**, so git alone answers most questions:
+
+```
+pkg/my-package/1.2.0.4
+
+package:       my-package
+packageId:     0Ho...
+versionId:     04t...
+versionNumber: 1.2.0.4
+branch:        feature/x
+commit:        abc1234
+runId:         17384920
+```
+
+### Resolving "last successful build"
+
+```mermaid
+flowchart TB
+  Q["need lastSuccessSha for <package>"] --> A["A · git tags<br/>git tag -l 'pkg/my-package/*' --sort=-v:refname"]
+  A -->|found| X["candidate SHA"]
+  A -->|none| B
+  X --> B["B · Dev Hub<br/>last successful Package2Version → Tag"]
+  B --> CMP{"agree?"}
+  CMP -->|yes| OK["use it"]
+  CMP -->|no| FIND["use Dev Hub value<br/>AND raise a finding:<br/>git/DevHub ledger divergence"]
+  CMP -->|DevHub unreachable| DEG["use git value<br/>flag as unverified"]
+```
+
+**The redundancy is the point.** Git tags are instant and work without Dev Hub auth; the Dev Hub
+is the authority. When they disagree, that disagreement is itself diagnostic — someone created a
+version manually outside CI, or a tag push failed — and the system reports it rather than
+silently picking one.
+
+**The rule:** every `sf package version create`, in every workflow, passes `--tag <sha>` and
+`--branch <branch>`; every **successful** create pushes the annotated git tag. No exceptions.
+A create without both is a version the system cannot reason about later.
+
+**This is not duplicate bookkeeping.** Both records are immutable, written once at creation, and
+derived from the same event — unlike a mutable `last-success.json` in the repo, which would
+drift and which the design explicitly rejects. Nothing ever updates either record after the
+fact.
+
+**Tag namespace hygiene.** The hierarchical `pkg/<package>/<version>` form keeps the namespace
+filterable (`git tag -l 'pkg/my-package/*'`) and sortable (`--sort=-v:refname`) even with
+hundreds of tags across several packages. Tags are cheap refs; a complete ledger is worth more
+than a tidy `git tag` listing.
+
+**Permission consequence:** the packaging job needs `contents: write` to push tags. It is
+otherwise unchanged, and it still never calls the AI.
 
 ---
 
@@ -93,7 +145,8 @@ sequenceDiagram
   GH->>DH: preflight — limits headroom check
   GH->>DH: sf package version create --tag SHA --branch BR
   DH-->>GH: request id → polling
-  DH-->>GH: SUCCESS · 04t… version id
+  DH-->>GH: SUCCESS · 04t… version id · 1.2.0.4
+  GH->>GH: push annotated tag pkg/my-package/1.2.0.4 → SHA
   GH->>GH: write version-report artifact
   GH-->>Dev: green check + version id in the summary
 ```
@@ -132,7 +185,8 @@ sequenceDiagram
   else Tier 2 · family / similar cases
     HW->>AG: evidence + precedents → adapt known plan
   else Tier 3 · unknown
-    HW->>DH: last successful version → lastSuccessSha
+    HW->>HW: git tags → candidate lastSuccessSha
+    HW->>DH: last successful version → authoritative lastSuccessSha
     HW->>HW: git diff · version content diff
     HW->>DH: scratch(good) + scratch(head) → metadata diff
     HW->>AG: full evidence pack → reason from scratch
@@ -168,8 +222,8 @@ You asked for the comparison on both sides. Both run, and they answer different 
 
 ```mermaid
 flowchart TB
-  S["failure at HEAD · SHA_head"] --> Q["Dev Hub: last successful<br/>Package2Version for this package"]
-  Q --> G["SHA_good = Tag of that version"]
+  S["failure at HEAD · SHA_head"] --> Q["resolve lastSuccessSha<br/>git tags → Dev Hub → cross-check<br/>(see §2)"]
+  Q --> G["SHA_good"]
 
   G --> A["A · git diff<br/>SHA_good..SHA_head"]
   G --> B["B · package version content diff"]
@@ -329,6 +383,17 @@ escalations. Adding a channel is an adapter, not a change to the reconciler.
 
 ## 9. Consumer repo wiring
 
+**Everything derivable is derived.** A parameter the workflow can compute is a parameter that can
+be passed wrong, so the input surface is close to empty:
+
+| Was an input | Now derived from |
+|---|---|
+| `tag` | `github.sha` — the runner already knows it |
+| `branch` | `github.ref_name` / the PR head ref |
+| `package` | the default `packageDirectories` entry in `sfdx-project.json`; required **only** when the project defines more than one package |
+| `skill` (healer) | `skillId` inside the evidence bundle |
+| `max-action-class` | the skill's policy profile |
+
 What a consuming project actually writes:
 
 ```yaml
@@ -339,11 +404,9 @@ on: [pull_request, push]
 jobs:
   package:
     uses: Gforce-Innovation-Kft/sf-selfheal/.github/workflows/sf-package-create.yml@v1
-    with:
-      package: my-package
-      tag: ${{ github.sha }}          # required — the correlation key
-    secrets:
-      sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}
+    secrets: inherit
+    permissions:
+      contents: write        # push the version tag
 ```
 
 ```yaml
@@ -358,15 +421,16 @@ jobs:
   heal:
     if: github.event.workflow_run.conclusion == 'failure'
     uses: Gforce-Innovation-Kft/sf-selfheal/.github/workflows/sf-selfheal.yml@v1
-    with:
-      skill: package-version-create
-      max-action-class: A4            # ceiling; policy may lower, never raise
-    secrets:
-      sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}
-      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    secrets: inherit
 ```
 
-Two files. The consumer never sees the reconciler, the tools, the policy or the corpus.
+Two files, zero required inputs in the common case. Multi-package projects add `package:` (or a
+matrix over packages); everything else stays derived. The consumer never sees the reconciler,
+the tools, the policy or the corpus.
+
+**Overrides still exist** — `package`, `max-action-class` and `dry-run` remain optional inputs —
+but the default path requires none of them. An input that must be supplied correctly on every
+call is a defect waiting to happen.
 
 ---
 
@@ -410,6 +474,9 @@ Deltas to fold into `2026-08-05-sf-selfheal-packaging-design.md`:
 | 5 | Skill roster expands: `deploy-validation`, `scratch-org-management`, `org-health-check`, `promotion-preparation`, `findings-signal` |
 | 6 | `FindingsSink` adapter interface added for the integration/signal surface |
 | 7 | `policy/installable-orgs.yml` is an A5 path — no tool can reach it |
+| 8 | Correlation is bidirectional: `Package2Version.Tag` **and** an annotated git tag `pkg/<package>/<version>`; divergence between them is a finding |
+| 9 | Packaging job needs `contents: write` to push version tags |
+| 10 | Workflow inputs derived from context (`tag`, `branch`, `package`, `skill`, `max-action-class`); overrides stay optional |
 
 ---
 
