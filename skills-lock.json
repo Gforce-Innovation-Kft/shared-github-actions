@@ -13,6 +13,18 @@
       "skillPath": "skills/dx-org-manage/SKILL.md",
       "computedHash": "d2b1dffe6376a3d1f04492d7880e15664c86a21ab5d01a13da49ecadbd5cf954"
     },
+    "dx-org-permission-set-assign": {
+      "source": "forcedotcom/sf-skills",
+      "sourceType": "github",
+      "skillPath": "skills/dx-org-permission-set-assign/SKILL.md",
+      "computedHash": "b1d3727d4352e05d1e02ad8be5d5db0ac4fb688c605eea8d7d76c9acb8754d9d"
+    },
+    "dx-pkg-post-install-configure": {
+      "source": "forcedotcom/sf-skills",
+      "sourceType": "github",
+      "skillPath": "skills/dx-pkg-post-install-configure/SKILL.md",
+      "computedHash": "30dd5bea1d8ed3a73c319ed04b766f208629dd7a8cd788b66302352495895792"
+    },
     "github-actions-docs": {
       "source": "xixu-me/skills",
       "sourceType": "github",
