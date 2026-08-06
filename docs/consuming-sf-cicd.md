@@ -36,7 +36,8 @@ ruleset that requires branches to be up to date before merging.
 ## Caller setup
 
 1. Repo secret `DEVHUB_AUTH_URL` — the SFDX auth URL of the target org
-   (`sf org display --verbose --json` → `sfdxAuthUrl`). Never commit it.
+   (`sf org auth show-sfdx-auth-url --target-org <alias> --json` → `sfdxAuthUrl`;
+   `sf org display` redacts it as of CLI 2.14x). Never commit it.
 2. GitHub Environment `devhub` with required reviewers — the manual deploy
    gate.
 3. The two caller workflows — copy `examples/sf-pr-validate.yml` and

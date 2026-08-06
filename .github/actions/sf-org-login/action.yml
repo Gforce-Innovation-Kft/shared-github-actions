@@ -80,7 +80,7 @@ runs:
         case "$AUTH_METHOD" in
           auth-url)
             if [ -z "$SFDX_AUTH_URL" ]; then
-              echo "::error::auth-method 'auth-url' needs sfdx-auth-url — pass the secret holding the force:// URL (sf org display --verbose --json | jq -r '.result.sfdxAuthUrl')" >&2
+              echo "::error::auth-method 'auth-url' needs sfdx-auth-url — pass the secret holding the force:// URL (sf org auth show-sfdx-auth-url --target-org <alias> --json | jq -rj '.result.sfdxAuthUrl')" >&2
               exit 1
             fi
             ;;
