@@ -1,0 +1,33 @@
+# Thin caller — delta validation on PRs, gated quick deploy on merge.
+# Save this in your repo as .github/workflows/release.yml.
+# The `devhub` GitHub Environment holds the required-reviewer gate.
+# Bootstrap a fresh org with: gh workflow run Release -f full-deploy=true
+name: Release
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      full-deploy:
+        description: 'Deploy every package directory (bootstrap / re-baseline)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release:
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-release.yml@v2
+    with:
+      environment: devhub
+      full-deploy: ${{ github.event_name == 'workflow_dispatch' && inputs.full-deploy }}
+    secrets:
+      sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}

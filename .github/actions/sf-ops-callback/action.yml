@@ -1,0 +1,209 @@
+name: "Salesforce Ops Callback"
+description: "Report a dispatched operation's terminal status back into Salesforce, keyed by the caller's correlation id"
+
+# The last link in the chain. Salesforce fires a dispatch and gets HTTP 204 with
+# an empty body — no run id — so the requester cannot find its own run without
+# racing. This action closes the loop from the other side: the run posts its
+# terminal status to an Apex REST endpoint, keyed by the correlation id the
+# requester generated. The LWC then reads its own record instead of polling
+# GitHub.
+#
+# It always reports. A failed operation still produces a callback with
+# status=failed, because a request that goes silent is worse than one that
+# fails.
+#
+# Caller permissions: contents: read
+
+inputs:
+  correlation-id:
+    description: "The requester's id for this operation — the key the Apex endpoint records against"
+    required: true
+  operation:
+    description: "Operation being reported (create-version, promote, install, ...)"
+    required: true
+  status:
+    description: "Terminal status: succeeded | failed | cancelled | no-route"
+    required: true
+  outputs-json:
+    description: "JSON object of operation results (version ids, version numbers, ...). Must parse as an object."
+    required: false
+    default: "{}"
+  error-code:
+    description: "Machine-readable error code from the taxonomy in docs/consuming-sf-dispatch.md"
+    required: false
+    default: ""
+  error-message:
+    description: "Human-readable failure detail"
+    required: false
+    default: ""
+  run-url:
+    description: "Workflow run URL. Defaults to this run."
+    required: false
+    default: ""
+  apex-rest-path:
+    description: "Apex REST endpoint that records the callback"
+    required: false
+    default: "/services/apexrest/gforce/ops-callback/v1"
+  org-alias:
+    description: "Alias of the authenticated Salesforce org that hosts the endpoint"
+    required: false
+    default: "callback"
+  dry-run:
+    description: "Render and print the payload without posting it. Used by the smoke path so the contract can be checked with no org."
+    required: false
+    default: "false"
+
+outputs:
+  payload:
+    description: "The rendered callback payload (JSON), so callers and smoke tests can assert on the contract"
+    value: ${{ steps.build.outputs.payload }}
+  http-status:
+    description: "HTTP status returned by the Apex endpoint, empty on a dry run"
+    value: ${{ steps.post.outputs.http-status }}
+  delivered:
+    description: "true when the endpoint accepted the callback"
+    value: ${{ steps.post.outputs.delivered }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build callback payload
+      id: build
+      shell: bash
+      env:
+        CORRELATION_ID: ${{ inputs.correlation-id }}
+        OPERATION: ${{ inputs.operation }}
+        STATUS: ${{ inputs.status }}
+        OUTPUTS_JSON: ${{ inputs.outputs-json }}
+        ERROR_CODE: ${{ inputs.error-code }}
+        ERROR_MESSAGE: ${{ inputs.error-message }}
+        RUN_URL: ${{ inputs.run-url }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$CORRELATION_ID" ]; then
+          echo "::error::correlation-id is empty — the callback would not be attributable to any request." >&2
+          exit 1
+        fi
+
+        case "$STATUS" in
+          succeeded|failed|cancelled|no-route) ;;
+          *)
+            echo "::error::status must be succeeded, failed, cancelled or no-route, got '$STATUS'." >&2
+            exit 1
+            ;;
+        esac
+
+        # Values reach node through env only — never interpolated into the script.
+        node <<'NODE' > payload.json
+        const env = process.env;
+
+        let outputs;
+        try {
+          outputs = JSON.parse(env.OUTPUTS_JSON || '{}');
+        } catch (error) {
+          console.error(`::error::outputs-json is not valid JSON: ${error.message}`);
+          process.exit(1);
+        }
+        if (outputs === null || typeof outputs !== 'object' || Array.isArray(outputs)) {
+          console.error('::error::outputs-json must be a JSON object.');
+          process.exit(1);
+        }
+
+        const runUrl =
+          env.RUN_URL ||
+          `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`;
+
+        console.log(JSON.stringify({
+          schemaVersion: 1,
+          correlationId: env.CORRELATION_ID,
+          operation: env.OPERATION,
+          status: env.STATUS,
+          errorCode: env.ERROR_CODE || null,
+          errorMessage: env.ERROR_MESSAGE || null,
+          outputs,
+          run: {
+            id: env.GITHUB_RUN_ID,
+            attempt: env.GITHUB_RUN_ATTEMPT,
+            number: env.GITHUB_RUN_NUMBER,
+            url: runUrl,
+            repository: env.GITHUB_REPOSITORY,
+            workflow: env.GITHUB_WORKFLOW,
+          },
+          completedAt: new Date().toISOString(),
+        }, null, 2));
+        NODE
+
+        # Multiline value — heredoc-delimited so JSON never breaks $GITHUB_OUTPUT.
+        {
+          echo "payload<<PAYLOAD_EOF"
+          cat payload.json
+          echo "PAYLOAD_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Post callback to Salesforce
+      id: post
+      shell: bash
+      env:
+        APEX_REST_PATH: ${{ inputs.apex-rest-path }}
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        CORRELATION_ID: ${{ inputs.correlation-id }}
+        OPERATION: ${{ inputs.operation }}
+        STATUS: ${{ inputs.status }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "## Ops callback"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Correlation id | \`$CORRELATION_ID\` |"
+          echo "| Operation | \`$OPERATION\` |"
+          echo "| Status | \`$STATUS\` |"
+          echo "| Endpoint | \`$APEX_REST_PATH\` |"
+          echo "| Mode | $([ "$DRY_RUN" = "true" ] && echo 'dry run — not posted' || echo 'posted') |"
+          echo
+          echo '```json'
+          cat payload.json
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "::notice::Dry run — callback for '$CORRELATION_ID' rendered but not posted."
+          {
+            echo "http-status="
+            echo "delivered=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        set +e
+        sf api request rest "$APEX_REST_PATH" \
+          --method POST \
+          --target-org "$ORG_ALIAS" \
+          --header "Content-Type:application/json" \
+          --body @payload.json \
+          --include > callback-response.txt 2>&1
+        POST_EXIT=$?
+        set -e
+        cat callback-response.txt
+
+        # --include prints the status line first: "HTTP/1.1 200 OK".
+        HTTP_STATUS=$(sed -n 's|^HTTP/[0-9.]* \([0-9][0-9][0-9]\).*|\1|p' callback-response.txt | head -1)
+        echo "http-status=$HTTP_STATUS" >> "$GITHUB_OUTPUT"
+
+        if [ "$POST_EXIT" -ne 0 ]; then
+          echo "delivered=false" >> "$GITHUB_OUTPUT"
+          echo "::error::Callback for '$CORRELATION_ID' was not delivered (exit $POST_EXIT, HTTP ${HTTP_STATUS:-none}). The operation's own result stands; only the report failed." >&2
+          exit 1
+        fi
+
+        echo "delivered=true" >> "$GITHUB_OUTPUT"
+        echo "::notice::Reported '$OPERATION' as '$STATUS' for correlation id '$CORRELATION_ID' (HTTP ${HTTP_STATUS:-200})."
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f payload.json callback-response.txt

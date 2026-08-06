@@ -1,0 +1,83 @@
+# Smoke path for the L3 dispatcher.
+#
+# Exercises routing, aggregation and the callback contract end to end with
+# `dry-run: true`, so a change to sf-ops-dispatch.yml can be checked without a
+# scratch org, without spending a Package2VersionCreates slot (6/day) and
+# without any Salesforce secret.
+#
+# What it does NOT prove: that the Salesforce operations themselves work. Those
+# are verified once, cheaply, per docs/consuming-sf-dispatch.md.
+#
+# The negative case (an operation that matches no route MUST fail the run) is
+# opt-in, because its assertion IS a red run: a job calling a reusable workflow
+# cannot take `continue-on-error`, so an expected failure cannot be marked as
+# expected. Run it by hand with negative-case: true and confirm the run is red.
+
+name: CI — SF Ops Dispatch Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reusable-sf-ops-dispatch.yml"
+      - ".github/workflows/ci-sf-ops-dispatch-smoke.yml"
+      - ".github/actions/sf-ops-callback/**"
+      - ".github/actions/sf-package-promote/**"
+      - ".github/actions/sf-package-install/**"
+  workflow_dispatch:
+    inputs:
+      negative-case:
+        description: "Also dispatch an unknown operation. The run is EXPECTED to end red — that is the assertion."
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  # Every operation, routed and reported, touching nothing.
+  dry-run-routes:
+    name: Dry run — ${{ matrix.operation }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - operation: create-version
+            version-id: ""
+          - operation: promote
+            version-id: "04tgL000000M26PQAS"
+          - operation: install
+            version-id: "04tgL000000M26PQAS"
+    # Must cover the WIDEST permission any job in the called workflow requests,
+    # not the ones this dry run actually exercises. GitHub validates the whole
+    # call graph before the run starts and refuses it if a called job asks for
+    # more than the calling job was granted — even when that job is skipped by
+    # `if:`. The dispatcher's create-version route needs `contents: write` to
+    # push the provenance tag, so `permissions: {}` here is a startup failure.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/reusable-sf-ops-dispatch.yml
+    with:
+      operation: ${{ matrix.operation }}
+      correlation-id: smoke-${{ github.run_id }}-${{ matrix.operation }}
+      package: weather-app
+      version-id: ${{ matrix.version-id }}
+      target-org-alias: smoke
+      # A dedicated environment so the smoke path never waits on the reviewers
+      # protecting the real promote/install gate.
+      environment: sf-ops-smoke
+      dry-run: true
+
+  # Opt-in: proves an unroutable operation cannot pass as green.
+  reject-unknown-operation:
+    name: Unknown operation must fail
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.negative-case }}
+    # Same reason as above — the grant is validated against the call graph, not
+    # against the route this job takes.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/reusable-sf-ops-dispatch.yml
+    with:
+      operation: definitely-not-an-operation
+      correlation-id: smoke-${{ github.run_id }}-negative
+      environment: sf-ops-smoke
+      dry-run: true

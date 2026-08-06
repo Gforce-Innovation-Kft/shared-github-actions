@@ -1,0 +1,68 @@
+---
+# Keeps docs/usage-catalog.{md,json} honest.
+#
+# The catalog is what tells a human or an agent which repositories a change here
+# would break. A stale catalog is worse than none, because it reads as an
+# all-clear — so this refreshes it weekly and opens a PR when it drifts.
+name: Refresh usage catalog
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — before the week's changes land.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: catalog-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Rescan the org and open a PR on drift
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v7
+
+      # The default GITHUB_TOKEN only sees this repo. Scanning the org needs a
+      # token with read access to the other repositories; without it the scan
+      # silently returns nothing, which would look like "no consumers".
+      - name: Rebuild the catalog
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_SCAN_TOKEN || github.token }}
+        run: ./.github/scripts/build-usage-catalog.sh
+
+      - name: Fail if the scan found nothing
+        run: |
+          set -euo pipefail
+          count=$(jq '[.assets[].consumers[].references[]] | length' docs/usage-catalog.json)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::Catalog scan found zero references. That is almost \
+          certainly a token scope problem, not an empty org — refusing to commit \
+          an all-clear that would be trusted."
+            exit 1
+          fi
+          echo "::notice::Catalog lists $count reference(s)."
+
+      - name: Open a PR when the catalog drifted
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: |
+            docs/usage-catalog.md
+            docs/usage-catalog.json
+          branch: chore/refresh-usage-catalog
+          delete-branch: true
+          commit-message: 'chore: refresh the consumer usage catalog'
+          title: 'chore: refresh the consumer usage catalog'
+          body: |
+            Weekly rescan of the org for references to this repo's actions and
+            reusable workflows.
+
+            Review the diff for **new consumers** (a change here now reaches
+            further) and for **disappeared consumers** (something was deleted or
+            re-pinned). Both are signals worth reading before merging.

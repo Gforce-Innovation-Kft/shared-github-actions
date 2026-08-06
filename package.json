@@ -9,9 +9,9 @@
   },
   "workspaces": [
     "gforce-gha-src",
-    ".github/actions/sync-branches",
-    ".github/actions/create-release-pr",
-    ".github/actions/sf-find-tests"
+    ".github/actions/github-branch-sync",
+    ".github/actions/github-release-pr-create",
+    ".github/actions/sf-apex-test-select"
   ],
   "scripts": {
     "format": "prettier --write \"**/*.{ts,mjs,cjs,js}\"",
