@@ -1,5 +1,5 @@
 /**
- * The sync-branches business workflow. The ladder (default `strategy: auto`):
+ * The github-branch-sync business workflow. The ladder (default `strategy: auto`):
  *
  *   1. Compare source -> target. If source has no new commits, do nothing.
  *   2. If the target is an ancestor of source, fast-forward the target ref.

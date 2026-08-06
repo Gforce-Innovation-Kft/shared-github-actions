@@ -1,5 +1,5 @@
 /**
- * The create-release-pr business workflow:
+ * The github-release-pr-create business workflow:
  *
  *   1. Compare source -> target to gather commits and changed files.
  *   2. Look for an existing open release PR for the same head/base.

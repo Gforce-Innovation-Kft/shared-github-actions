@@ -18,7 +18,7 @@ carries two thin callers; all logic lives here behind the `v1` release tag.
 **Release** (`sf-release.yml`) — one workflow, two phases:
 
 - On `pull_request`: generates a delta package (sfdx-git-delta), selects
-  the relevant Apex tests with `sf-find-tests` (naming + reference scan),
+  the relevant Apex tests with `sf-apex-test-select` (naming + reference scan),
   check-only deploys the delta against the target org
   (`RunSpecifiedTests`; falls back to `RunLocalTests` when Apex changed but
   no covering tests were found; no test run for metadata-only deltas), and
@@ -48,10 +48,10 @@ ruleset that requires branches to be up to date before merging.
 
 See the workflow files' `workflow_call` blocks for the full typed list:
 
-- [`sf-pr-validate.yml`](../.github/workflows/sf-pr-validate.yml) —
+- [`sf-pr-validate.yml`](../.github/workflows/reusable-sf-pr-validate.yml) —
   `container-image`, `checkout-submodules`, `retention-days`; secret
   `sfdx-auth-url`.
-- [`sf-release.yml`](../.github/workflows/sf-release.yml) — adds
+- [`sf-release.yml`](../.github/workflows/reusable-sf-release.yml) — adds
   `environment` (default `devhub`) and `full-deploy`; outputs the deploy
   request ids and the selected tests.
 
@@ -60,8 +60,8 @@ See the workflow files' `workflow_call` blocks for the full typed list:
 | Piece | Role |
 |-------|------|
 | `sf-org-login` (composite) | SFDX auth-URL login with `if: always()` cleanup |
-| `sf-delta-package` (composite) | Delta `package.xml` between two refs + component table |
-| `sf-find-tests` (TypeScript action) | Delta-scoped Apex test selection |
+| `sf-source-delta` (composite) | Delta `package.xml` between two refs + component table |
+| `sf-apex-test-select` (TypeScript action) | Delta-scoped Apex test selection |
 
 Composite/TS actions inside the reusable workflows are referenced by
 absolute `@v1` refs because actions resolve against the **caller's**

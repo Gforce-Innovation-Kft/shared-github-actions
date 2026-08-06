@@ -14,7 +14,7 @@ Two independent layerings, easy to confuse:
 |---|---|---|
 | **L1** capability actions | `.github/actions/<name>/` | **One** Salesforce/CLI operation each. No branching between operations, no knowledge of *why* they were invoked. Idempotent wherever the underlying `sf` command allows. |
 | **L2** reusable workflows | `.github/workflows/sf-*.yml` (`workflow_call`) | Compose L1 into a pipeline with business meaning. Typed inputs/outputs, `secrets:` declared explicitly. Never triggered directly by a human or by Salesforce. |
-| **L3** dispatch | `.github/workflows/sf-ops-dispatch.yml` | The single external entry point. Validates a request from Salesforce, routes it to exactly one L2/L1 path, reports the terminal status back. |
+| **L3** dispatch | `.github/workflows/reusable-sf-ops-dispatch.yml` | The single external entry point. Validates a request from Salesforce, routes it to exactly one L2/L1 path, reports the terminal status back. |
 | **L4** consumers | the app repo (`sf-develop-demo`) | Thin `uses:` callers on push/PR/tag/dispatch. Out of this repo except for the contract they must honour. |
 
 Rules that keep the layers apart:
@@ -38,11 +38,11 @@ L4  sf-develop-demo/.github/workflows/sf-ops.yml
       run-name: carries the correlation id (a called workflow's run-name is ignored)
         │  uses:
         ▼
-L3  sf-ops-dispatch.yml   (workflow_call)
+L3  reusable-sf-ops-dispatch.yml   (workflow_call)
       concurrency: sf-ops-<correlation-id>, cancel-in-progress: false
       │
       ├─ normalize              Tier 2 github-script — the only reader of untrusted input
-      ├─ create-version   ────► L2 sf-package-release.yml ─► L1 sf-org-login, sf-scratch-org,
+      ├─ create-version   ────► L2 reusable-sf-package-release.yml ─► L1 sf-org-login, sf-org-scratch-create,
       │                                                        sf-package-create
       ├─ create-version-dry-run
       ├─ promote          ────► L1 sf-org-login → sf-package-promote      [environment gate]
@@ -178,7 +178,7 @@ support nested roots); `.github/actions/package.json` just holds the
 - Coverage gate: 95% global on every metric; actual coverage is 100%.
 - `__tests__/integration/<name>.integration.test.ts` drives each action's
   `Orchestrator.execute()` end-to-end (clients mocked at the boundary, or the
-  real filesystem for sf-find-tests) and asserts the committed bundle exists.
+  real filesystem for sf-apex-test-select) and asserts the committed bundle exists.
   Run by `test:integration`, chained into the package `test` script.
 
 ## CI

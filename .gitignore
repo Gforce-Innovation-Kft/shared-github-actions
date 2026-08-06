@@ -44,4 +44,7 @@ tmp/
 temp/
 *.tmp
 
+# Local AI/session scratch — not part of the repo
 .jira
+.jira-ai
+.superpowers

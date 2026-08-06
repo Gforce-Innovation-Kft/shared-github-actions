@@ -31,18 +31,18 @@ flowchart TB
     end
 
     subgraph L3["L3 — dispatch (shared-github-actions)"]
-        DISPATCH["sf-ops-dispatch.yml<br/><i>validate → route → report</i>"]:::new
+        DISPATCH["reusable-sf-ops-dispatch.yml<br/><i>validate → route → report</i>"]:::new
     end
 
     subgraph L2["L2 — reusable workflows"]
-        REL["sf-package-release.yml"]:::built
+        REL["reusable-sf-package-release.yml"]:::built
         PRV["sf-pr-validate.yml"]:::built
         SFR["sf-release.yml"]:::built
     end
 
     subgraph L1["L1 — capability actions"]
         A1["sf-org-login"]:::new
-        A2["sf-scratch-org"]:::built
+        A2["sf-org-scratch-create"]:::built
         A3["sf-package-create"]:::built
         A4["sf-package-promote"]:::new
         A5["sf-package-install"]:::new
@@ -87,7 +87,7 @@ flowchart TB
 
     NORM["<b>normalize</b><br/><i>Tier 2 — github-script@v9</i><br/>allow-list the operation<br/>regex every value<br/>values via env: only, never inline expressions"]:::new
 
-    CV["<b>create-version</b><br/>→ sf-package-release.yml"]:::built
+    CV["<b>create-version</b><br/>→ reusable-sf-package-release.yml"]:::built
     CVD["<b>create-version-dry-run</b><br/><i>a uses: job cannot skip<br/>its own steps</i>"]:::new
     PR["<b>promote</b><br/>→ sf-package-promote<br/>🔒 environment gate"]:::new
     IN2["<b>install</b><br/>→ sf-package-install<br/>🔒 environment gate"]:::new
@@ -172,7 +172,7 @@ sequenceDiagram
 flowchart LR
     D["L3 create-version"]:::new --> V
 
-    subgraph REL["L2 sf-package-release.yml"]
+    subgraph REL["L2 reusable-sf-package-release.yml"]
         direction TB
         V["<b>validate</b><br/>scratch org<br/>deploy + RunLocalTests"]:::built
         P["<b>package</b><br/>Dev Hub only"]:::built
@@ -180,7 +180,7 @@ flowchart LR
         V -->|"success or skipped"| P --> R
     end
 
-    V --> SO["sf-scratch-org<br/><i>capacity preflight</i>"]:::built
+    V --> SO["sf-org-scratch-create<br/><i>capacity preflight</i>"]:::built
     P --> PC["sf-package-create<br/><i>headroom preflight</i>"]:::built
     PC --> TAG["provenance tag<br/>pkg/&lt;pkg&gt;/&lt;version&gt;"]:::built
     R --> GH["GitHub Release<br/>+ release-manifest.json"]:::built
@@ -268,7 +268,7 @@ flowchart LR
 | `create-version` idempotency | A retry with the same correlation id builds a second version and spends a second slot out of 6/day | `sf-package-create`: `--tag` as an input + a `Package2Version.Tag` preflight |
 | Apex REST callback endpoint | Every callback currently 404s | `sf-develop-demo` — upsert on `correlationId`, publish a platform event |
 | L4 caller `sf-ops.yml` | Nothing in the app repo receives `sf_ops_requested` | Copy the template from [consuming-sf-dispatch.md](consuming-sf-dispatch.md) §6 |
-| `v1` tag is stale | It predates `sf-org-login`, `sf-package-create` and `sf-scratch-org`, so `@v1` refs do not resolve | `release.yml` force-moves the floating tag — cut a release |
+| `v1` tag is stale | It predates `sf-org-login`, `sf-package-create` and `sf-org-scratch-create`, so `@v1` refs do not resolve | `release.yml` force-moves the floating tag — cut a release |
 
 ---
 

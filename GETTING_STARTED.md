@@ -31,7 +31,7 @@ on:
 
 jobs:
   analyze:
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1
     permissions:
       pull-requests: write
       contents: read
@@ -67,7 +67,7 @@ For private repositories:
 ### Using the Major Tag (Recommended)
 
 ```yaml
-uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1
 ```
 
 **Pros:** Fixes and non-breaking features arrive automatically; breaking changes never do (they bump the major)
@@ -76,7 +76,7 @@ uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-c
 ### Using Exact Release Tags
 
 ```yaml
-uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/salesforce-code-analyzer.yml@v1.0.0
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1.0.0
 ```
 
 **Pros:** Immutable, fully predictable behavior

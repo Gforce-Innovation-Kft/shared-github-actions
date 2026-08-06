@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-08-06
-- **Affects:** `.github/workflows/sf-ops-dispatch.yml`, `.github/actions/sf-ops-callback`,
+- **Affects:** `.github/workflows/reusable-sf-ops-dispatch.yml`, `.github/actions/sf-ops-callback`,
   `.github/actions/sf-package-promote`, `.github/actions/sf-package-install`,
   `.github/actions/sf-org-login`
 
@@ -22,7 +22,7 @@ of. This ADR records the design of **L3**, the dispatch layer that closes those 
 |---|---|---|
 | L1 | `.github/actions/*` | One Salesforce/CLI operation each. No branching between operations, no knowledge of why it was invoked. |
 | L2 | `.github/workflows/sf-*.yml` | Composes L1 into a pipeline with business meaning. Typed inputs/outputs, explicit `secrets:`. Never triggered by a human or by Salesforce. |
-| **L3** | `.github/workflows/sf-ops-dispatch.yml` | **The single external entry point.** Validates, routes to exactly one L2/L1 path, reports the terminal status back. |
+| **L3** | `.github/workflows/reusable-sf-ops-dispatch.yml` | **The single external entry point.** Validates, routes to exactly one L2/L1 path, reports the terminal status back. |
 | L4 | consumer repos (`sf-develop-demo`) | Thin `uses:` callers. Out of scope here except for the contract they honour — see [consuming-sf-dispatch.md](../consuming-sf-dispatch.md). |
 
 ## Decision 1 — Accept both entry points, normalize once

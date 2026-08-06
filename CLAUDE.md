@@ -8,11 +8,30 @@ Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a
 strict, class-based singleton architecture with a single shared source tree),
 **composite actions**, and **callable workflows** for Salesforce CI/CD pipelines.
 
+## Naming convention
+
+Recorded in [ADR 0002](docs/adr/0002-naming-and-repo-structure.md). Two rules:
+
+- **Actions** are `<domain>-<object>-<verb>`, domain ∈ `sf` · `aws` · `github` · `git`.
+  So `sf-package-create`, `aws-secret-get`, `github-branch-sync`. Never verb-first.
+- **Workflows** whose trigger is `workflow_call` are `reusable-<domain>-<name>.yml`.
+  Anything unprefixed is this repo's own CI (`ci.yml`, `release.yml`,
+  `ci-sf-ops-dispatch-smoke.yml`). GitHub forbids subdirectories under
+  `.github/workflows/`, so the name is the only available separator.
+
 ## Reference Pattern
 
 From other repos, reference items using:
 - Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v1`
-- Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<workflow-name>.yml@v1`
+- Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v1`
+
+`v1` is frozen at the pre-rename layout, so existing consumers keep working. The
+renamed actions land in the next major tag.
+
+**Self-references inside a reusable workflow** must be absolute — a `./` ref
+resolves against the *caller's* repo, not this one. They are pinned to
+`@develop` until a release is cut; rewriting them to `@vX` is a release step
+(ADR 0002, decision 6).
 
 ## Pipeline Layers (L1–L4)
 
@@ -27,8 +46,8 @@ a separate thing, documented in `docs/architecture.md`.
 | Layer | Lives in | Contract |
 |---|---|---|
 | **L1** | `.github/actions/<name>/` | **One** Salesforce/CLI operation each. No branching between operations, no knowledge of why it was invoked. |
-| **L2** | `.github/workflows/sf-*.yml` (`workflow_call`) | Composes L1 into a pipeline with business meaning. Typed inputs/outputs, explicit `secrets:`. Never triggered by a human or by Salesforce. |
-| **L3** | `.github/workflows/sf-ops-dispatch.yml` | The single external entry point for Salesforce. Validates, routes to exactly one L2/L1 path, reports the result back. |
+| **L2** | `.github/workflows/reusable-sf-*.yml` (`workflow_call`) | Composes L1 into a pipeline with business meaning. Typed inputs/outputs, explicit `secrets:`. Never triggered by a human or by Salesforce. |
+| **L3** | `.github/workflows/reusable-sf-ops-dispatch.yml` | The single external entry point for Salesforce. Validates, routes to exactly one L2/L1 path, reports the result back. |
 | **L4** | consumer repos | Thin `uses:` callers. Not in this repo. |
 
 Rules: **L1 never calls L1** (an action that only picks between two other actions
@@ -60,15 +79,15 @@ conflict) are typed values. Tests: `method_scenario_expectedResult` naming,
 Given/When/Then, mock at the singleton boundary, 95% coverage gate (100%
 actual).
 
-### `sync-branches`
+### `github-branch-sync`
 Fast-forward / merge / open a sync PR on conflict. `dry-run` defaults to `true`.
 Caller permissions: `contents: write` + `pull-requests: write`.
 
-### `create-release-pr`
+### `github-release-pr-create`
 Create or update a release PR (templated body, labels, reviewers). `dry-run`
 defaults to `true`. Caller permissions: `contents: read` + `pull-requests: write`.
 
-### `sf-find-tests`
+### `sf-apex-test-select`
 Select the Apex test classes relevant to a delta `package.xml` —
 naming-convention matches plus a reference scan of the source tree. Inputs:
 `package-xml` (required), `source-dir` (default `force-app`),
@@ -82,7 +101,7 @@ rationale is in `docs/architecture.md`. **Before any PR, run `npm run all`**
 
 ## Composite Actions
 
-### `get-aws-secret` (`.github/actions/get-aws-secret/action.yml`)
+### `aws-secret-get` (`.github/actions/aws-secret-get/action.yml`)
 
 Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSON secret fields are set as environment variables. Requires caller permissions `id-token: write` + `contents: read`.
 
@@ -91,7 +110,7 @@ Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSO
 
 ### `sf-org-login` (`.github/actions/sf-org-login/action.yml`)
 
-The single login action — **two credential sources, one contract**. `auth-method: auth-url` (default) runs `sf org login sfdx-url` from a GitHub secret, no cloud dependency. `auth-method: jwt` runs `get-aws-secret`, decodes the base64 key, and runs `sf org login jwt`. Both end with the same authenticated `sf` CLI under `org-alias`, so downstream actions never branch on how the job authenticated. Inputs are validated before any credential file is written; every credential file is removed in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
+The single login action — **two credential sources, one contract**. `auth-method: auth-url` (default) runs `sf org login sfdx-url` from a GitHub secret, no cloud dependency. `auth-method: jwt` runs `aws-secret-get`, decodes the base64 key, and runs `sf org login jwt`. Both end with the same authenticated `sf` CLI under `org-alias`, so downstream actions never branch on how the job authenticated. Inputs are validated before any credential file is written; every credential file is removed in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
 
 **Inputs (shared):** `auth-method` (`auth-url` | `jwt`, default `auth-url`), `org-alias` (default `target`), `set-default` (default `false`), `set-default-dev-hub` (default `false`)
 **Inputs (`auth-url`):** `sfdx-auth-url` (required for this method — always a secret)
@@ -105,7 +124,7 @@ The single login action — **two credential sources, one contract**. `auth-meth
 > explicitly — the merged action defaults to `target`/`false`, not the old
 > `devhub`/`true`.
 
-### `sf-delta-package` (`.github/actions/sf-delta-package/action.yml`)
+### `sf-source-delta` (`.github/actions/sf-source-delta/action.yml`)
 
 Generates a delta `package.xml` between two git refs with sfdx-git-delta (installs the plugin on the fly when missing; preinstalled in `gforceinnovation/sf-ci`). Writes a component table to the step summary and `<output-dir>/components.md`. Requires a `fetch-depth: 0` checkout so both refs resolve.
 
@@ -115,17 +134,22 @@ Generates a delta `package.xml` between two git refs with sfdx-git-delta (instal
 ### `sf-package-create` (`.github/actions/sf-package-create/action.yml`)
 
 Creates **one** 2GP package version: resolves the package from `sfdx-project.json`, refuses to
-start unless the Dev Hub has headroom, runs `sf package version create`, pushes an annotated
-`pkg/<package>/<versionNumber>` provenance tag, and on failure queries
+start unless the Dev Hub has headroom, runs `sf package version create`, and on failure queries
 `Package2VersionCreateRequestError` so Salesforce's own message lands in the job log.
+
+It does **not** tag the commit. Creating a version is a Salesforce operation; tagging the commit
+that produced it is a git one, and bundling them forced `contents: write` on every caller that
+only wanted a version. `reusable-sf-package-release.yml` pushes the annotated
+`pkg/<package>/<versionNumber>` tag instead — see [ADR 0002](docs/adr/0002-naming-and-repo-structure.md),
+decision 4.
 
 Preflight checks the limit the run will actually spend: `Package2VersionCreates` (6/day) normally,
 `Package2VersionCreatesWithoutValidation` (500/day) when `skip-validation` is true — checking the
 wrong one blocks a build against quota it never consumes.
 
-**Inputs:** `package` (falls back to the single or `default: true` entry), `dev-hub-alias` (default `devhub`), `wait-minutes` (default `60`), `code-coverage` (default `true` — set `false` for packages with no Apex tests), `skip-validation`, `branch` (empty ⇒ flag omitted; see below), `installation-key` (empty ⇒ `--installation-key-bypass`), `preflight-min-headroom` (default `2`), `push-tag` (default `true`), `evidence-path`
-**Outputs:** `version-id` (`04t`), `package-version-id` (`05i`), `version-number`, `request-id` (`08c`), `status`, `git-tag`
-**Caller permissions:** `contents: write` (tag push), or `contents: read` when `push-tag: false`
+**Inputs:** `package` (falls back to the single or `default: true` entry), `dev-hub-alias` (default `devhub`), `wait-minutes` (default `60`), `code-coverage` (default `true` — set `false` for packages with no Apex tests), `skip-validation`, `branch` (empty ⇒ flag omitted; see below), `installation-key` (empty ⇒ `--installation-key-bypass`), `preflight-min-headroom` (default `2`), `evidence-path`
+**Outputs:** `package-name`, `version-id` (`04t`), `package-version-id` (`05i`), `version-number`, `request-id` (`08c`), `status`
+**Caller permissions:** `contents: read`
 
 It does **not** resolve dependency order or install anything — callers own that. `wait-minutes` is
 a hard ceiling: if the build is still running when it expires the step fails and prints the
@@ -141,7 +165,7 @@ It currently hardcodes `--tag "$GITHUB_SHA"`. Making that an input is what unloc
 preflight SOQL can short-circuit a retried request without spending a quota slot. See
 [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md), decision 4.
 
-### `sf-scratch-org` (`.github/actions/sf-scratch-org/action.yml`)
+### `sf-org-scratch-create` (`.github/actions/sf-org-scratch-create/action.yml`)
 
 Creates a scratch org, refusing to start when the Dev Hub has no capacity. Both governing limits are checked up front (`ActiveScratchOrgs` — how many may exist at once; `DailyScratchOrgs` — how many per rolling 24h) because hitting either produces the same unhelpful `LIMIT_EXCEEDED` from the CLI.
 
@@ -179,32 +203,27 @@ Reports a dispatched operation's terminal status back into Salesforce, keyed by 
 
 `dry-run: true` renders the payload to the step summary without posting — that is what lets the whole chain be smoke-tested with no org and no secret.
 
-Scope note: the plan in `docs/superpowers/plans/2026-08-05-part1-package-create-action.md` also
-specified a TypeScript twin (`sf-package-create-node`), a `sf-package-create.yml` reusable
-workflow and a benchmark. **None were built** — only the composite action exists. The workspace
-digest that supported that comparison was removed; `--tag "$GITHUB_SHA"` already identifies the
-packaged content in CI.
+Scope note: an earlier plan also specified a TypeScript twin (`sf-package-create-node`), a
+dedicated `sf-package-create` reusable workflow and a benchmark. **None were built** — only the
+composite action exists. The workspace digest that supported that comparison was removed;
+`--tag "$GITHUB_SHA"` already identifies the packaged content in CI.
 
 ## Reusable Workflows
 
-### `salesforce-code-analyzer` (`.github/workflows/salesforce-code-analyzer.yml`)
+### `reusable-sf-code-analyze` (`.github/workflows/reusable-sf-code-analyze.yml`)
 
 Runs Salesforce Code Analyzer (`forcedotcom/run-code-analyzer@v2`) with configurable quality gates. Sets up Node.js, Java, Python, installs SF CLI and the code-analyzer plugin. Posts results as PR comments. Requires `pull-requests: write`, `contents: read`, `actions: read` permissions in the caller.
 
 **Key inputs:** `workspace`, `fail-on-sev1-violations`, `fail-on-sev2-violations`, `max-violations`, `fail-on-changed-files-only`
 **Outputs:** `exit-code`, `num-violations`, `num-sev1-violations`, `num-sev2-violations`
 
-### `docker-build-test-push` (`.github/workflows/docker-build-test-push.yml`)
+> **Docker moved out.** `docker-build-test-push.yml` now lives in `sf-docker-images` as
+> `.github/workflows/reusable-docker-image-build.yml`. It had exactly one consumer — that repo —
+> so the cross-repo coupling cost two PRs and a tag move per change and bought nothing. See
+> [ADR 0002](docs/adr/0002-naming-and-repo-structure.md), decision 3. This repository now covers
+> exactly three domains: Salesforce, GitHub, AWS.
 
-Builds, tests, and pushes **one** Docker image per invocation (callers matrix over their images). Stages: buildx build (per-image GHA cache scope, image tar artifact) → pytest-testinfra + JUnit check + Trivy SARIF → multi-arch Docker Hub push with SBOM/provenance, keyless cosign signing (OIDC), optional Docker Hub README sync, and a `version-report-<image-name>` artifact for the caller's release job. Tag scheme: `{{version}}` + `latest` only. Designed for and consumed by `sf-docker-images`.
-
-**Key inputs:** `image-name` (unique per caller run — artifact names derive from it), `context`, `push` (default `false`; set from the caller's tag ref), `image-description` (enables README sync), `dockerhub-username`, `platforms`, `python-version`, `artifact-retention-days`
-**Secrets:** `dockerhub-token` (read/write; only consumed when `push: true`)
-**Caller permissions:** `contents: read`, `checks: write`, `pull-requests: write`, `security-events: write`, `id-token: write` (cosign keyless)
-**Caller repo contract:** pytest suites at `tests/test_<image_name_with_underscores>.py` + `tests/requirements.txt`.
-**Do not rename/move this file** — its path is the cosign certificate identity (`job_workflow_ref`); renaming invalidates all documented `cosign verify` commands.
-
-### `sf-pr-validate` (`.github/workflows/sf-pr-validate.yml`)
+### `reusable-sf-pr-validate` (`.github/workflows/reusable-sf-pr-validate.yml`)
 
 PR code health, one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). Jobs: `jest` (runs `npm test` when the consumer's `package.json` has a `test` script; skips with a notice otherwise) and `scratch-org` (creates a 1-day scratch org from `config/scratch-orgs/ci.json`, deploys the project, assigns permission sets, runs `RunLocalTests` with coverage, uploads the results, always deletes the org).
 
@@ -213,9 +232,9 @@ PR code health, one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`).
 **Outputs:** none declared
 **Caller permissions:** `contents: read`
 
-### `sf-release` (`.github/workflows/sf-release.yml`)
+### `sf-release` (`.github/workflows/reusable-sf-release.yml`)
 
-One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). On `pull_request`: `sf-delta-package` → `sf-find-tests` (naming + reference scan) → check-only deploy against the target org (`RunSpecifiedTests`, falling back to `RunLocalTests` when Apex changed but no covering tests were found; no test run for metadata-only deltas) → `validation.json` quick-deploy handoff uploaded in the `sf-release-<run_number>` artifact. On `push` to main (or `workflow_dispatch`): behind the caller's `environment` gate, quick-deploys the validated request (looked up merge-commit → PR → head SHA → `sf-release-*` artifact; valid only if org id + head SHA match and <10 days old) → fallback delta deploy (same recorded test plan) → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision).
+One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). On `pull_request`: `sf-source-delta` → `sf-apex-test-select` (naming + reference scan) → check-only deploy against the target org (`RunSpecifiedTests`, falling back to `RunLocalTests` when Apex changed but no covering tests were found; no test run for metadata-only deltas) → `validation.json` quick-deploy handoff uploaded in the `sf-release-<run_number>` artifact. On `push` to main (or `workflow_dispatch`): behind the caller's `environment` gate, quick-deploys the validated request (looked up merge-commit → PR → head SHA → `sf-release-*` artifact; valid only if org id + head SHA match and <10 days old) → fallback delta deploy (same recorded test plan) → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision).
 
 **Key inputs:** `environment` (default `devhub`), `container-image`, `checkout-submodules`, `retention-days`, `full-deploy` (default `false`)
 **Secrets:** `sfdx-auth-url` (required)
@@ -223,12 +242,12 @@ One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consumi
 **Outputs:** `component-count`, `deploy-request-id`, `tests` (PR runs); `deploy-id`, `quick-deployed` (push runs)
 **Caller permissions:** `contents: read`, `actions: read`
 
-### `sf-ops-dispatch` (`.github/workflows/sf-ops-dispatch.yml`)
+### `sf-ops-dispatch` (`.github/workflows/reusable-sf-ops-dispatch.yml`)
 
 **L3 — the single external entry point.** Salesforce (LWC → Apex → GitHub App JWT → dispatch API) asks for one operation; this routes it to exactly one path and reports the terminal status back. Design record: [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md). Salesforce-side contract: [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
 
 ```text
-normalize ─┬─ create-version ──► sf-package-release.yml (L2)
+normalize ─┬─ create-version ──► reusable-sf-package-release.yml (L2)
            ├─ create-version-dry-run
            ├─ promote ────────► sf-package-promote (L1)   [environment gate]
            ├─ install ────────► sf-package-install  (L1)  [environment gate]
@@ -247,13 +266,22 @@ Three invariants this file exists to hold, all easy to break by accident:
 
 `run-name:` cannot carry the correlation id from here: a called workflow's `run-name` is ignored and the caller's applies. The L4 template in the consuming doc sets it.
 
-### `sf-ops-dispatch-smoke` (`.github/workflows/sf-ops-dispatch-smoke.yml`)
+## Internal CI Workflows
+
+Unprefixed — these are this repo's own CI and are **not** meant to be called from elsewhere.
+
+### `ci.yml`
+`quality` (format, lint, typecheck, bundle, test at the 95% gate, `dist:verify`) plus `smoke`,
+which drives the local actions with `./` refs and asserts their declared outputs.
+
+### `ci-sf-ops-dispatch-smoke.yml`
 
 Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion *is* a red run: a job calling a reusable workflow cannot take `continue-on-error`.
 
-### `test-simple` (`.github/workflows/test-simple.yml`)
-
-A minimal test workflow that echoes a message. Used for verifying cross-repo workflow calls work.
+### `release.yml`
+On a `vX.Y.Z` tag push: creates the GitHub Release and force-moves the floating `vX` tag.
+**Before tagging, rewrite the reusable workflows' `@develop` self-references to `@vX`** — see
+ADR 0002, decision 6.
 
 ## Authoring Conventions
 
@@ -271,7 +299,7 @@ Invoke the relevant one when the task matches:
 | Skill | Use when |
 |-------|----------|
 | `github-actions-docs` | Authoring/editing workflows or `action.yml` — keeps YAML aligned with current GitHub Actions syntax (composite/reusable/TypeScript action patterns). |
-| `requesting-code-review` | Preparing a change for review (e.g. before a `create-release-pr` / `sync-branches` PR). |
+| `requesting-code-review` | Preparing a change for review (e.g. before a `github-release-pr-create` / `github-branch-sync` PR). |
 | `receiving-code-review` | Responding to review feedback on a PR. |
 | `code-review` | Reviewing TypeScript for quality/correctness (`packages/core` + action adapters). |
 
