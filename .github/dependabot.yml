@@ -9,7 +9,7 @@ updates:
     directories:
       - "/"
       - "/.github/actions/get-aws-secret"
-      - "/.github/actions/sf-jwt-login"
+      - "/.github/actions/sf-org-login"
     schedule:
       interval: "weekly"
     groups:
