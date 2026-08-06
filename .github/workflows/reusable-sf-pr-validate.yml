@@ -44,6 +44,7 @@ on:
 
 jobs:
   jest:
+    name: Jest tests (skipped without a test script)
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
@@ -80,6 +81,7 @@ jobs:
         run: npm test
 
   scratch-org:
+    name: Scratch org — deploy, permsets, RunLocalTests
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}

@@ -73,6 +73,7 @@ on:
 
 jobs:
   validate:
+    name: Validate — delta + check-only deploy
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     container:
@@ -231,6 +232,7 @@ jobs:
           if-no-files-found: warn
 
   quick-deploy:
+    name: Deploy — quick-deploy the validated request
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     container:

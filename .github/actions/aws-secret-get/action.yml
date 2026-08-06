@@ -27,14 +27,14 @@ runs:
   using: "composite"
   steps:
     - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.aws-role-arn }}
         aws-region: ${{ inputs.aws-region }}
         role-session-name: GitHubActions-${{ github.run_id }}
 
     - name: Retrieve Secret from AWS Secrets Manager
-      uses: aws-actions/aws-secretsmanager-get-secrets@2cb1a461cbd4865ac4299648312e4704c646cd53 # v3.0.1
+      uses: aws-actions/aws-secretsmanager-get-secrets@v3
       with:
         secret-ids: |
           ,${{ inputs.secret-name }}
