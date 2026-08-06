@@ -1,0 +1,248 @@
+name: "Salesforce Package Install"
+description: "Install one 2GP package version into a target org, polling to a terminal state and surfacing Salesforce's own install errors"
+
+# Installs exactly ONE version. 2GP dependencies are not transitive — Salesforce
+# installs what you name and nothing else — so callers install a chain by
+# calling this once per version, dependencies first (see sf-package-resolve for
+# producing that order).
+#
+# `sf package install --wait` polls the SubscriberPackageVersionInstallRequest
+# to a terminal state inside the CLI, which is why this stays a composite
+# action: there is no polling loop to write.
+#
+# Caller permissions: contents: read
+
+inputs:
+  version-id:
+    description: "SubscriberPackageVersionId (04t...) to install"
+    required: true
+  target-org-alias:
+    description: "Alias of the authenticated target org"
+    required: false
+    default: "target"
+  installation-key:
+    description: "Installation key, when the version was built with one. Always pass a secret."
+    required: false
+    default: ""
+  wait-minutes:
+    description: "Hard ceiling on the install wait. Exceeding it fails the step rather than waiting again."
+    required: false
+    default: "20"
+  publish-wait-minutes:
+    description: "How long to wait for the version to finish publishing to the target org before installing"
+    required: false
+    default: "10"
+  security-type:
+    description: "Who gets access on install: AdminsOnly or AllUsers"
+    required: false
+    default: "AdminsOnly"
+  upgrade-type:
+    description: "What happens to removed components on upgrade: Mixed, DeprecateOnly or Delete"
+    required: false
+    default: "Mixed"
+  evidence-path:
+    description: "Directory for failure evidence (install errors). Upload it from the caller on failure."
+    required: false
+    default: "evidence"
+
+outputs:
+  status:
+    description: "installed | already-installed"
+    value: ${{ steps.install.outputs.status }}
+  installed:
+    description: "true when this run performed the install, false when the version was already present"
+    value: ${{ steps.install.outputs.installed }}
+  install-request-id:
+    description: "SubscriberPackageVersionInstallRequest id, empty when nothing was installed"
+    value: ${{ steps.install.outputs.install-request-id }}
+  version-id:
+    description: "Echo of the installed SubscriberPackageVersionId, so matrix legs can be correlated"
+    value: ${{ inputs.version-id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check whether the version is already installed
+      id: preflight
+      shell: bash
+      env:
+        VERSION_ID: ${{ inputs.version-id }}
+        TARGET_ORG_ALIAS: ${{ inputs.target-org-alias }}
+        SECURITY_TYPE: ${{ inputs.security-type }}
+        UPGRADE_TYPE: ${{ inputs.upgrade-type }}
+      run: |
+        set -euo pipefail
+
+        case "$VERSION_ID" in
+          04t*) ;;
+          *)
+            echo "::error::version-id must be a SubscriberPackageVersionId starting with 04t, got '$VERSION_ID'." >&2
+            exit 1
+            ;;
+        esac
+
+        case "$SECURITY_TYPE" in
+          AdminsOnly|AllUsers) ;;
+          *) echo "::error::security-type must be AdminsOnly or AllUsers, got '$SECURITY_TYPE'." >&2; exit 1 ;;
+        esac
+
+        case "$UPGRADE_TYPE" in
+          Mixed|DeprecateOnly|Delete) ;;
+          *) echo "::error::upgrade-type must be Mixed, DeprecateOnly or Delete, got '$UPGRADE_TYPE'." >&2; exit 1 ;;
+        esac
+
+        # A retried request must not reinstall. Ask the org what it already has
+        # rather than pattern-matching the CLI's failure message.
+        QUERY="SELECT SubscriberPackageVersionId FROM InstalledSubscriberPackage WHERE SubscriberPackageVersionId = '$VERSION_ID'"
+
+        set +e
+        sf data query --use-tooling-api --json \
+          --target-org "$TARGET_ORG_ALIAS" \
+          --query "$QUERY" > installed.json 2> installed.log
+        QUERY_EXIT=$?
+        set -e
+        cat installed.log >&2 || true
+
+        if [ ! -s installed.json ]; then
+          echo "::error::The Salesforce CLI produced no JSON for the installed-package lookup (exit $QUERY_EXIT). See the log above." >&2
+          exit 1
+        fi
+
+        TOTAL=$(node -pe "JSON.parse(require('fs').readFileSync('installed.json','utf8')).result.totalSize ?? 0")
+        if [ "$TOTAL" -gt 0 ]; then
+          echo "already-installed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "already-installed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install the version
+      id: install
+      shell: bash
+      env:
+        VERSION_ID: ${{ inputs.version-id }}
+        TARGET_ORG_ALIAS: ${{ inputs.target-org-alias }}
+        INSTALLATION_KEY: ${{ inputs.installation-key }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+        PUBLISH_WAIT_MINUTES: ${{ inputs.publish-wait-minutes }}
+        SECURITY_TYPE: ${{ inputs.security-type }}
+        UPGRADE_TYPE: ${{ inputs.upgrade-type }}
+        ALREADY_INSTALLED: ${{ steps.preflight.outputs.already-installed }}
+      run: |
+        set -euo pipefail
+
+        if [ "$ALREADY_INSTALLED" = "true" ]; then
+          echo "::notice::$VERSION_ID is already installed in '$TARGET_ORG_ALIAS' — nothing to do."
+          {
+            echo "status=already-installed"
+            echo "installed=false"
+            echo "install-request-id="
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        ARGS=(
+          --package "$VERSION_ID"
+          --target-org "$TARGET_ORG_ALIAS"
+          --wait "$WAIT_MINUTES"
+          --publish-wait "$PUBLISH_WAIT_MINUTES"
+          --security-type "$SECURITY_TYPE"
+          --upgrade-type "$UPGRADE_TYPE"
+          --no-prompt
+          --json
+        )
+        if [ -n "$INSTALLATION_KEY" ]; then
+          ARGS+=(--installation-key "$INSTALLATION_KEY")
+        fi
+
+        set +e
+        sf package install "${ARGS[@]}" > install.json 2> install.log
+        INSTALL_EXIT=$?
+        set -e
+        cat install.log >&2 || true
+
+        if [ ! -s install.json ]; then
+          echo "::error::The Salesforce CLI produced no JSON (exit $INSTALL_EXIT). See the log above." >&2
+          exit 1
+        fi
+
+        read_field() {
+          node -pe "try { JSON.parse(require('fs').readFileSync('install.json','utf8')).$1 ?? '' } catch { '' }"
+        }
+
+        REQUEST_ID=$(read_field "result.Id")
+        STATUS=$(read_field "result.Status")
+
+        echo "install-request-id=$REQUEST_ID" >> "$GITHUB_OUTPUT"
+
+        if [ "$INSTALL_EXIT" -ne 0 ] || [ "$STATUS" != "SUCCESS" ]; then
+          echo "::error title=INSTALL_FAILED::Installing $VERSION_ID into '$TARGET_ORG_ALIAS' ended as '${STATUS:-unknown}' (exit $INSTALL_EXIT). Request: ${REQUEST_ID:-none}." >&2
+          exit 1
+        fi
+
+        {
+          echo "status=installed"
+          echo "installed=true"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Installed $VERSION_ID into '$TARGET_ORG_ALIAS' (request $REQUEST_ID)."
+
+    - name: Collect install errors
+      if: failure()
+      shell: bash
+      env:
+        VERSION_ID: ${{ inputs.version-id }}
+        TARGET_ORG_ALIAS: ${{ inputs.target-org-alias }}
+        REQUEST_ID: ${{ steps.install.outputs.install-request-id }}
+        EVIDENCE_PATH: ${{ inputs.evidence-path }}
+      run: |
+        set -uo pipefail
+
+        # Best-effort: the run has already failed, so never fail again in here.
+        mkdir -p "$EVIDENCE_PATH"
+
+        if [ -n "$REQUEST_ID" ]; then
+          sf data query --use-tooling-api --json \
+            --target-org "$TARGET_ORG_ALIAS" \
+            --query "SELECT Id, Status, Errors FROM SubscriberPackageVersionInstallRequest WHERE Id = '$REQUEST_ID'" \
+            > "$EVIDENCE_PATH/install-request.json" 2>&1 || true
+        fi
+
+        if [ -s install.json ]; then
+          cp install.json "$EVIDENCE_PATH/install-result.json" || true
+        fi
+
+        # Salesforce's own message is the only useful one — put it in the log.
+        # Paths reach node through env, never through string interpolation.
+        node <<'NODE' 2>/dev/null | while IFS= read -r LINE; do [ -n "$LINE" ] && echo "::error::$LINE"; done
+        const fs = require('fs');
+        const dir = process.env.EVIDENCE_PATH;
+        for (const file of ['install-request.json', 'install-result.json']) {
+          let data;
+          try {
+            data = JSON.parse(fs.readFileSync(`${dir}/${file}`, 'utf8'));
+          } catch {
+            continue;
+          }
+          const errors = data.result?.records?.[0]?.Errors ?? data.result?.Errors ?? data.message ?? '';
+          for (const error of [].concat(errors).filter(Boolean)) {
+            console.log(String(error).replace(/\r?\n/g, ' '));
+          }
+        }
+        NODE
+
+        {
+          echo "## Package install — failed"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Version Id | \`$VERSION_ID\` |"
+          echo "| Target org | \`$TARGET_ORG_ALIAS\` |"
+          echo "| Install request | \`${REQUEST_ID:-none}\` |"
+          echo
+          echo "Evidence written to \`$EVIDENCE_PATH/\`."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f installed.json installed.log install.json install.log

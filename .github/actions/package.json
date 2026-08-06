@@ -4,6 +4,6 @@
   "private": true,
   "description": "Shared config + build orchestration for the bundled TypeScript action entries",
   "scripts": {
-    "build:all": "npm run build --prefix sync-branches && npm run build --prefix create-release-pr && npm run build --prefix sf-find-tests"
+    "build:all": "npm run build --prefix github-branch-sync && npm run build --prefix github-release-pr-create && npm run build --prefix sf-apex-test-select"
   }
 }

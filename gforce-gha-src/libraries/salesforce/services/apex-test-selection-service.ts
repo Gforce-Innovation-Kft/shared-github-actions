@@ -1,5 +1,5 @@
 /**
- * The sf-find-tests business workflow: read the delta manifest, classify the
+ * The sf-apex-test-select business workflow: read the delta manifest, classify the
  * Apex members, load the source tree, and select the relevant test classes.
  * Filesystem access goes through {@link FileSystemService}.
  */

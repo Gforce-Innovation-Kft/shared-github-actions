@@ -1,0 +1,282 @@
+name: "Salesforce Package Version Create"
+description: "Create a 2GP package version and surface Salesforce's own error records on failure"
+author: "GForce Innovation"
+
+# Caller permissions: contents: read
+#
+# Scope: this action creates ONE package version. It does not resolve dependency
+# order, install anything, or decide whether a build is warranted — callers own
+# that. `sf package version create` reads dependencies from sfdx-project.json
+# itself; note that 2GP dependencies are NOT transitive, so a package must
+# declare its full flattened chain in install order.
+#
+# It also does not tag the commit. Creating a package version is a Salesforce
+# operation; tagging the commit that produced it is a git one, and bundling them
+# forced `contents: write` on every caller that only wanted a version. The
+# annotated pkg/<package>/<versionNumber> tag is pushed by
+# reusable-sf-package-release.yml instead — see ADR 0002, decision 4. The
+# `package-name` and `version-number` outputs exist so a caller can build it.
+
+inputs:
+  package:
+    description: "Package name or alias from sfdx-project.json. Falls back to the single package entry, or the one marked default."
+    required: false
+    default: ""
+  dev-hub-alias:
+    description: "Alias or username of the Dev Hub org"
+    required: false
+    default: "devhub"
+  wait-minutes:
+    description: "Minutes to wait for the build to reach a terminal state. The step fails if it does not — it never waits longer than this."
+    required: false
+    default: "60"
+  code-coverage:
+    description: "Calculate and store code coverage. Ignored when skip-validation is true (coverage is computed during validation). Set false for packages with no Apex tests."
+    required: false
+    default: "true"
+  skip-validation:
+    description: "Skip validation. Draws on the 500/day limit instead of the 6/day one."
+    required: false
+    default: "false"
+  branch:
+    description: >-
+      Value for --branch. Empty (the default) omits the flag. Do NOT set this
+      casually: --branch does not merely label the version, it scopes DEPENDENCY
+      resolution to that branch, so a package whose dependencies resolve via
+      x.y.z.LATEST fails with NoReleaseVersionFoundForBranchError unless those
+      dependencies were themselves built on the same branch.
+    required: false
+    default: ""
+  installation-key:
+    description: "Installation key protecting the package. Empty (the default) passes --installation-key-bypass."
+    required: false
+    default: ""
+  preflight-min-headroom:
+    description: "Fail before starting if the Dev Hub has fewer than this many package version creates left"
+    required: false
+    default: "2"
+  evidence-path:
+    description: "Directory the failure evidence is written to"
+    required: false
+    default: "evidence"
+
+outputs:
+  package-name:
+    description: "Package the version was built from, as resolved from sfdx-project.json"
+    value: ${{ steps.preflight.outputs.package-name }}
+  version-id:
+    description: "SubscriberPackageVersionId (04t) — the id you install"
+    value: ${{ steps.create.outputs.version-id }}
+  package-version-id:
+    description: "Package2VersionId (05i)"
+    value: ${{ steps.create.outputs.package-version-id }}
+  version-number:
+    description: "Version number, Major.Minor.Patch.Build"
+    value: ${{ steps.create.outputs.version-number }}
+  request-id:
+    description: "Package2VersionCreateRequest id (08c) — use it to resume a timed-out build"
+    value: ${{ steps.create.outputs.request-id }}
+  status:
+    description: "Terminal status of the create request"
+    value: ${{ steps.create.outputs.status }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve package and check Dev Hub headroom
+      id: preflight
+      shell: bash
+      env:
+        REQUESTED_PACKAGE: ${{ inputs.package }}
+        DEV_HUB: ${{ inputs.dev-hub-alias }}
+        SKIP_VALIDATION: ${{ inputs.skip-validation }}
+        MIN_HEADROOM: ${{ inputs.preflight-min-headroom }}
+      run: |
+        set -euo pipefail
+
+        # Container jobs mount the workspace with mismatched ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+        sf org list limits --target-org "$DEV_HUB" --json > sf-limits.json
+
+        node <<'NODE' >> "$GITHUB_OUTPUT"
+        const fs = require('node:fs');
+        const fail = (m) => { process.stderr.write(`::error::${m.replace(/\n/g, '%0A')}\n`); process.exit(1); };
+
+        const project = fs.existsSync('sfdx-project.json')
+          ? JSON.parse(fs.readFileSync('sfdx-project.json', 'utf8'))
+          : fail('No sfdx-project.json in the workspace root.');
+
+        // Only entries carrying `package` can be versioned; the rest are source-only.
+        const candidates = (project.packageDirectories ?? []).filter((d) => d.package);
+        const requested = (process.env.REQUESTED_PACKAGE ?? '').trim();
+        const list = candidates.map((d) => `  - ${d.package} (${d.path})`).join('\n');
+
+        if (candidates.length === 0) {
+          fail('sfdx-project.json has no packageDirectories entry with a "package" property — nothing to version.');
+        }
+
+        const entry = requested
+          ? candidates.find((d) => d.package === requested)
+            ?? fail(`Package "${requested}" is not in sfdx-project.json. Available:\n${list}`)
+          : candidates.length === 1
+            ? candidates[0]
+            : candidates.filter((d) => d.default === true)[0]
+              ?? fail(`Several packages defined and none requested. Set the "package" input to one of:\n${list}`);
+
+        if (!fs.existsSync(entry.path)) fail(`Package directory "${entry.path}" does not exist.`);
+
+        // --skip-validation draws on a DIFFERENT limit; checking the wrong one
+        // blocks a build against quota it never spends.
+        const limitName = process.env.SKIP_VALIDATION === 'true'
+          ? 'Package2VersionCreatesWithoutValidation'
+          : 'Package2VersionCreates';
+        const limits = JSON.parse(fs.readFileSync('sf-limits.json', 'utf8')).result ?? [];
+        const limit = limits.find((l) => l.name === limitName)
+          ?? fail(`Dev Hub reports no "${limitName}" limit. Second-generation packaging is probably not enabled (Setup -> Package Manager).`);
+
+        const min = Number(process.env.MIN_HEADROOM);
+        if (limit.remaining < min) {
+          fail(`Dev Hub headroom too low: ${limitName} has ${limit.remaining} of ${limit.max} left, below the required ${min}.`);
+        }
+
+        process.stderr.write(`Package "${entry.package}" at ${entry.path}; ${limitName} ${limit.remaining}/${limit.max}.\n`);
+        console.log(`package-name=${entry.package}`);
+        NODE
+
+    - name: Create package version
+      id: create
+      shell: bash
+      env:
+        DEV_HUB: ${{ inputs.dev-hub-alias }}
+        PACKAGE_NAME: ${{ steps.preflight.outputs.package-name }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+        CODE_COVERAGE: ${{ inputs.code-coverage }}
+        SKIP_VALIDATION: ${{ inputs.skip-validation }}
+        INSTALL_KEY: ${{ inputs.installation-key }}
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+
+        ARGS=(
+          --package "$PACKAGE_NAME"
+          --target-dev-hub "$DEV_HUB"
+          --tag "$GITHUB_SHA"
+          --version-description "commit:${GITHUB_SHA:0:12} run:${GITHUB_RUN_ID}"
+          --wait "$WAIT_MINUTES"
+          --json
+        )
+
+        # Opt-in only. Passing the current ref here (the obvious thing to do)
+        # scopes dependency resolution to that branch, so any package whose
+        # dependencies use x.y.z.LATEST dies with
+        # NoReleaseVersionFoundForBranchError. The commit is already recorded
+        # via --tag, so provenance does not need --branch.
+        [ -n "$BRANCH" ] && ARGS+=(--branch "$BRANCH")
+
+        # The CLI rejects --code-coverage together with --skip-validation.
+        if [ "$SKIP_VALIDATION" = "true" ]; then
+          ARGS+=(--skip-validation)
+        elif [ "$CODE_COVERAGE" = "true" ]; then
+          ARGS+=(--code-coverage)
+        fi
+
+        if [ -n "$INSTALL_KEY" ]; then
+          ARGS+=(--installation-key "$INSTALL_KEY")
+        else
+          ARGS+=(--installation-key-bypass)
+        fi
+
+        # A failed create still produces JSON we need, so capture the exit code
+        # rather than letting set -e abort here.
+        set +e
+        sf package version create "${ARGS[@]}" > sf-create.json 2> sf-create.log
+        CREATE_EXIT=$?
+        set -e
+        # Stays in the job log, where GitHub's secret masking applies. It is
+        # deliberately NOT written to an artifact, where masking does not apply.
+        cat sf-create.log >&2 || true
+
+        if [ ! -s sf-create.json ]; then
+          echo "::error::The Salesforce CLI produced no JSON (exit $CREATE_EXIT). See the log above." >&2
+          exit 1
+        fi
+
+        node <<'NODE' >> "$GITHUB_OUTPUT"
+        const fs = require('node:fs');
+        const parsed = JSON.parse(fs.readFileSync('sf-create.json', 'utf8'));
+        // `create` returns an object; `create report` returns an array.
+        const raw = parsed.result ?? {};
+        const r = Array.isArray(raw) ? (raw[0] ?? {}) : raw;
+
+        // A command-level failure (bad flags, unresolvable dependency, auth)
+        // returns {status, name, message} with NO result at all. Without this
+        // the run reports a useless status of "unknown" and hides the reason.
+        if (!r.Status && parsed.status && parsed.status !== 0) {
+          const name = parsed.name ?? parsed.code ?? 'SalesforceCliError';
+          const message = String(parsed.message ?? 'no message').replace(/\n/g, '%0A');
+          process.stderr.write(`::error::${name}: ${message}\n`);
+          process.exit(1);
+        }
+
+        console.log(`request-id=${r.Id ?? ''}`);
+        console.log(`status=${r.Status ?? ''}`);
+        console.log(`package-version-id=${r.Package2VersionId ?? ''}`);
+        console.log(`version-id=${r.SubscriberPackageVersionId ?? ''}`);
+        console.log(`version-number=${r.VersionNumber ?? ''}`);
+
+        if (r.Status === 'Success') {
+          process.stderr.write(`Created ${r.SubscriberPackageVersionId} (${r.VersionNumber}).\n`);
+          process.exit(0);
+        }
+
+        // Non-terminal means --wait expired. Say so and hand back the resume
+        // command instead of silently waiting a second time.
+        const stillRunning = r.Status && !['Success', 'Error'].includes(r.Status);
+        const errors = Array.isArray(r.Error) ? r.Error : [];
+        const detail = errors.length ? `%0A${errors.map(String).join('%0A')}` : '';
+        const hint = stillRunning
+          ? `%0AThe build was still "${r.Status}" when the wait expired. It may still finish. Resume with:%0A  sf package version create report --package-create-request-id ${r.Id} --target-dev-hub <hub>`
+          : '';
+        process.stderr.write(`::error::Package version create ended as "${r.Status ?? 'unknown'}".${detail}${hint}\n`);
+        process.exit(1);
+        NODE
+
+    - name: Surface Salesforce error records
+      if: failure() && steps.create.outputs.request-id != ''
+      shell: bash
+      env:
+        DEV_HUB: ${{ inputs.dev-hub-alias }}
+        REQUEST_ID: ${{ steps.create.outputs.request-id }}
+        EVIDENCE_PATH: ${{ inputs.evidence-path }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$EVIDENCE_PATH"
+
+        # ParentRequestId is the error -> request foreign key (docs/bench/ground-truth.md §4).
+        # These records are Id/Message/Status/Tag/dates — no secrets by schema,
+        # which is why they can be artifacted without redaction.
+        sf data query --use-tooling-api --target-org "$DEV_HUB" --json \
+          --query "SELECT Id, Message, CreatedDate FROM Package2VersionCreateRequestError WHERE ParentRequestId = '$REQUEST_ID'" \
+          > "$EVIDENCE_PATH/request-errors.json" 2>/dev/null || echo '{}' > "$EVIDENCE_PATH/request-errors.json"
+
+        sf data query --use-tooling-api --target-org "$DEV_HUB" --json \
+          --query "SELECT Id, Status, Package2Id, Package2VersionId, Tag, Branch, CreatedDate FROM Package2VersionCreateRequest WHERE Id = '$REQUEST_ID'" \
+          > "$EVIDENCE_PATH/request.json" 2>/dev/null || echo '{}' > "$EVIDENCE_PATH/request.json"
+
+        # Nobody should have to download an artifact to learn what broke.
+        node <<'NODE'
+        const fs = require('node:fs');
+        const path = `${process.env.EVIDENCE_PATH}/request-errors.json`;
+        const records = JSON.parse(fs.readFileSync(path, 'utf8')).result?.records ?? [];
+        if (!records.length) {
+          process.stderr.write('No Package2VersionCreateRequestError rows for this request.\n');
+        } else {
+          process.stderr.write(`::error::Salesforce reported ${records.length} error(s):%0A${records.map((r) => r.Message).join('%0A')}\n`);
+        }
+        NODE
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f sf-limits.json sf-create.json sf-create.log

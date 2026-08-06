@@ -21,6 +21,11 @@ the issue, steps to reproduce, and the affected action/workflow.
   mutable branch.
 - Grant callers only the permissions documented per action in the
   [README](README.md) (`permissions:` blocks are least-privilege).
-- Secrets consumed via `get-aws-secret` / `sf-jwt-login` come from AWS Secrets
-  Manager over OIDC; no long-lived credentials or PATs are used, and key files
-  are removed in `if: always()` cleanup steps.
+- Secrets consumed via `aws-secret-get` / `sf-org-login` (`auth-method: jwt`)
+  come from AWS Secrets Manager over OIDC; no long-lived credentials or PATs are
+  used, and key files are removed in `if: always()` cleanup steps.
+- `sf-org-login` can emit the org's `access-token` for actions that call the
+  Salesforce APIs directly. It is `::add-mask::`ed before it reaches any output,
+  but treat it as a secret at every call site: pass it through `env:`, never
+  into a step summary, an artifact, or a `${{ }}` interpolation inside a script
+  body.

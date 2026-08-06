@@ -1,0 +1,19 @@
+# Thin caller — all validation logic lives in shared-github-actions.
+# See docs/consuming-sf-cicd.md for the pipeline overview and required setup.
+name: PR Validate
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-pr-validate.yml@v2
+    secrets:
+      sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}

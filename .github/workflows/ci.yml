@@ -67,14 +67,14 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Smoke sf-find-tests (offline, committed fixtures)
+      - name: Smoke sf-apex-test-select (offline, committed fixtures)
         id: find-tests
-        uses: ./.github/actions/sf-find-tests
+        uses: ./.github/actions/sf-apex-test-select
         with:
           package-xml: gforce-gha-src/__tests__/support/fixtures/package.xml
           source-dir: gforce-gha-src/__tests__/support/fixtures/force-app
 
-      - name: Assert sf-find-tests outputs
+      - name: Assert sf-apex-test-select outputs
         env:
           HAS_APEX: ${{ steps.find-tests.outputs.has-apex }}
           TEST_COUNT: ${{ steps.find-tests.outputs.test-count }}
@@ -86,17 +86,17 @@ jobs:
 
       # source==target is rejected by input validation, so these two smoke over
       # the PR's own refs and therefore only run on pull_request events.
-      - name: Smoke sync-branches (dry-run over the PR refs)
+      - name: Smoke github-branch-sync (dry-run over the PR refs)
         if: github.event_name == 'pull_request'
         id: sync
-        uses: ./.github/actions/sync-branches
+        uses: ./.github/actions/github-branch-sync
         with:
           source-branch: ${{ github.head_ref }}
           target-branch: ${{ github.base_ref }}
           dry-run: true
           github-token: ${{ github.token }}
 
-      - name: Assert sync-branches outputs
+      - name: Assert github-branch-sync outputs
         if: github.event_name == 'pull_request'
         env:
           SYNC_DRY_RUN: ${{ steps.sync.outputs.dry-run }}
@@ -107,10 +107,10 @@ jobs:
           test -n "$SYNC_ACTION"
           test "$SYNC_SYNCED" = "false"
 
-      - name: Smoke create-release-pr (dry-run over the PR refs)
+      - name: Smoke github-release-pr-create (dry-run over the PR refs)
         if: github.event_name == 'pull_request'
         id: release-pr
-        uses: ./.github/actions/create-release-pr
+        uses: ./.github/actions/github-release-pr-create
         with:
           source-branch: ${{ github.head_ref }}
           target-branch: ${{ github.base_ref }}
@@ -118,7 +118,7 @@ jobs:
           dry-run: true
           github-token: ${{ github.token }}
 
-      - name: Assert create-release-pr outputs
+      - name: Assert github-release-pr-create outputs
         if: github.event_name == 'pull_request'
         env:
           PR_DRY_RUN: ${{ steps.release-pr.outputs.dry-run }}
@@ -128,3 +128,51 @@ jobs:
           test "$PR_DRY_RUN" = "true"
           test "$PR_CREATED" = "false"
           test "$PR_UPDATED" = "false"
+
+      # The Salesforce ops chain. These composites need no org: the callback
+      # renders its payload in dry-run, and the two package actions reject a
+      # malformed version id before they ever reach the CLI.
+      - name: Smoke sf-ops-callback (dry-run, no org)
+        id: callback
+        uses: ./.github/actions/sf-ops-callback
+        with:
+          correlation-id: ci-smoke-00000001
+          operation: promote
+          status: succeeded
+          outputs-json: '{"versionId":"04tSMOKE0000000000"}'
+          dry-run: true
+
+      - name: Assert sf-ops-callback contract
+        env:
+          DELIVERED: ${{ steps.callback.outputs.delivered }}
+          HTTP_STATUS: ${{ steps.callback.outputs.http-status }}
+          PAYLOAD: ${{ steps.callback.outputs.payload }}
+        run: |
+          test "$DELIVERED" = "false"
+          test -z "$HTTP_STATUS"
+          # The Apex endpoint keys on these three; losing one silently breaks the round trip.
+          echo "$PAYLOAD" | grep -q '"correlationId": "ci-smoke-00000001"'
+          echo "$PAYLOAD" | grep -q '"status": "succeeded"'
+          echo "$PAYLOAD" | grep -q '"versionId": "04tSMOKE0000000000"'
+
+      - name: Smoke sf-package-promote (must reject a non-04t id)
+        id: promote-bad-id
+        continue-on-error: true
+        uses: ./.github/actions/sf-package-promote
+        with:
+          version-id: not-a-package-version
+
+      - name: Smoke sf-package-install (must reject a non-04t id)
+        id: install-bad-id
+        continue-on-error: true
+        uses: ./.github/actions/sf-package-install
+        with:
+          version-id: not-a-package-version
+
+      - name: Assert the package actions fail closed on bad input
+        env:
+          PROMOTE_OUTCOME: ${{ steps.promote-bad-id.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install-bad-id.outcome }}
+        run: |
+          test "$PROMOTE_OUTCOME" = "failure"
+          test "$INSTALL_OUTCOME" = "failure"

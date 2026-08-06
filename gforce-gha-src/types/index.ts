@@ -10,14 +10,14 @@ export interface RepoRef {
   readonly repo: string;
 }
 
-// sync-branches
+// github-branch-sync
 export const SYNC_STRATEGIES = ['auto', 'fast-forward', 'merge'] as const;
 export type SyncStrategy = (typeof SYNC_STRATEGIES)[number];
 
 /** What the sync actually did (or would do, in dry-run). */
 export type SyncAction = 'none' | 'fast-forward' | 'merge' | 'pull-request';
 
-/** Normalized, validated sync-branches inputs. */
+/** Normalized, validated github-branch-sync inputs. */
 export interface ValidatedSyncBranchesInputs {
   readonly sourceBranch: string;
   readonly targetBranch: string;
@@ -42,9 +42,9 @@ export interface SyncBranchesResult {
   readonly reason: string;
 }
 
-// create-release-pr
+// github-release-pr-create
 
-/** Normalized, validated create-release-pr inputs. */
+/** Normalized, validated github-release-pr-create inputs. */
 export interface ValidatedCreateReleasePrInputs {
   readonly sourceBranch: string;
   readonly targetBranch: string;
@@ -72,10 +72,10 @@ export interface CreateReleasePrResult {
   readonly body: string;
 }
 
-// sf-find-tests
+// sf-apex-test-select
 
 /**
- * Normalized, validated sf-find-tests inputs. `githubToken` is required by the
+ * Normalized, validated sf-apex-test-select inputs. `githubToken` is required by the
  * action interface for parity, but the selection makes no GitHub API calls.
  */
 export interface ValidatedSfFindTestsInputs {

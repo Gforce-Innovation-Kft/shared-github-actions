@@ -1,0 +1,159 @@
+name: "Salesforce Org Scratch Create"
+description: "Create a scratch org, refusing to start when the Dev Hub has no capacity"
+author: "GForce Innovation"
+
+# Caller permissions: none beyond the checkout.
+#
+# This action does NOT delete the org. Composite actions cannot register a
+# `post:` step (that is JavaScript/Docker actions only), so every caller must
+# pair it with its own cleanup:
+#
+#   - name: Delete scratch org
+#     if: always()
+#     shell: bash
+#     run: sf org delete scratch --target-org <alias> --no-prompt || true
+#
+# Two different limits govern scratch orgs and hitting either produces the same
+# unhelpful LIMIT_EXCEEDED from the CLI, so both are checked up front:
+#   ActiveScratchOrgs — how many may exist at once
+#   DailyScratchOrgs  — how many may be created per rolling 24h
+
+inputs:
+  definition-file:
+    description: "Scratch org definition file"
+    required: false
+    default: "config/project-scratch-def.json"
+  alias:
+    description: "Alias for the new scratch org"
+    required: false
+    default: "ci-scratch"
+  duration-days:
+    description: "How long the org lives. Keep short in CI so an abandoned run self-heals."
+    required: false
+    default: "1"
+  dev-hub-alias:
+    description: "Alias or username of the Dev Hub"
+    required: false
+    default: "devhub"
+  set-default:
+    description: "Set the new org as the default target org"
+    required: false
+    default: "true"
+  wait:
+    description: "Minutes to wait for the org to be created"
+    required: false
+    default: "30"
+
+outputs:
+  alias:
+    description: "Alias of the created org — pass this to --target-org"
+    value: ${{ inputs.alias }}
+  org-id:
+    description: "The scratch org id"
+    value: ${{ steps.create.outputs.org-id }}
+  username:
+    description: "Username of the scratch org admin"
+    value: ${{ steps.create.outputs.username }}
+  instance-url:
+    description: "Instance URL of the scratch org"
+    value: ${{ steps.create.outputs.instance-url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check Dev Hub scratch org capacity
+      shell: bash
+      env:
+        DEV_HUB: ${{ inputs.dev-hub-alias }}
+        DEFINITION_FILE: ${{ inputs.definition-file }}
+      run: |
+        set -euo pipefail
+
+        # Container jobs mount the workspace with mismatched ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+
+        if [ ! -f "$DEFINITION_FILE" ]; then
+          echo "::error::Scratch org definition file '$DEFINITION_FILE' not found." >&2
+          exit 1
+        fi
+
+        sf org list limits --target-org "$DEV_HUB" --json > sf-org-limits.json
+
+        node <<'NODE'
+        const fs = require('node:fs');
+        const limits = JSON.parse(fs.readFileSync('sf-org-limits.json', 'utf8')).result ?? [];
+
+        let blocked = false;
+        for (const name of ['ActiveScratchOrgs', 'DailyScratchOrgs']) {
+          const limit = limits.find((l) => l.name === name);
+          if (!limit) {
+            process.stderr.write(`::warning::Dev Hub reports no "${name}" limit — skipping that check.\n`);
+            continue;
+          }
+          process.stderr.write(`${name}: ${limit.remaining}/${limit.max} remaining.\n`);
+          if (limit.remaining < 1) {
+            process.stderr.write(
+              `::error::No scratch org capacity: ${name} is ${limit.remaining}/${limit.max}.` +
+              ` Delete an org (sf org list, then sf org delete scratch) or wait for the limit to reset.\n`
+            );
+            blocked = true;
+          }
+        }
+        process.exit(blocked ? 1 : 0);
+        NODE
+
+    - name: Create scratch org
+      id: create
+      shell: bash
+      env:
+        DEV_HUB: ${{ inputs.dev-hub-alias }}
+        DEFINITION_FILE: ${{ inputs.definition-file }}
+        ORG_ALIAS: ${{ inputs.alias }}
+        DURATION_DAYS: ${{ inputs.duration-days }}
+        SET_DEFAULT: ${{ inputs.set-default }}
+        WAIT: ${{ inputs.wait }}
+      run: |
+        set -euo pipefail
+
+        ARGS=(
+          --definition-file "$DEFINITION_FILE"
+          --alias "$ORG_ALIAS"
+          --target-dev-hub "$DEV_HUB"
+          --duration-days "$DURATION_DAYS"
+          --wait "$WAIT"
+          --json
+        )
+        [ "$SET_DEFAULT" = "true" ] && ARGS+=(--set-default)
+
+        set +e
+        sf org create scratch "${ARGS[@]}" > sf-scratch.json 2> sf-scratch.log
+        CREATE_EXIT=$?
+        set -e
+        cat sf-scratch.log >&2 || true
+
+        if [ ! -s sf-scratch.json ]; then
+          echo "::error::The Salesforce CLI produced no JSON (exit $CREATE_EXIT). See the log above." >&2
+          exit 1
+        fi
+
+        node <<'NODE' >> "$GITHUB_OUTPUT"
+        const fs = require('node:fs');
+        const parsed = JSON.parse(fs.readFileSync('sf-scratch.json', 'utf8'));
+        const r = parsed.result ?? {};
+
+        if (!r.username) {
+          const message = parsed.message ?? 'no username in the CLI response';
+          process.stderr.write(`::error::Scratch org creation failed: ${message}\n`);
+          process.exit(1);
+        }
+
+        console.log(`org-id=${r.orgId ?? ''}`);
+        console.log(`username=${r.username}`);
+        console.log(`instance-url=${r.instanceUrl ?? ''}`);
+        process.stderr.write(`Created scratch org ${r.username} (${r.orgId ?? 'unknown id'}).\n`);
+        NODE
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f sf-org-limits.json sf-scratch.json sf-scratch.log
