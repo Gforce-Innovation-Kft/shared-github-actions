@@ -350,7 +350,11 @@ jobs:
   release:
     name: Publish release
     needs: package
-    if: ${{ needs.package.result == 'success' }}
+    # `always()` for the same reason `package` needs it: a skip propagates
+    # transitively. With run-validate: false, `validate` skips, and without
+    # always() this job skips too even though `package` succeeded — publishing
+    # nothing while the run still reports green.
+    if: ${{ always() && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
