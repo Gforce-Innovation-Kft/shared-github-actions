@@ -47,7 +47,14 @@ jobs:
             version-id: "04tgL000000M26PQAS"
           - operation: install
             version-id: "04tgL000000M26PQAS"
-    permissions: {}
+    # Must cover the WIDEST permission any job in the called workflow requests,
+    # not the ones this dry run actually exercises. GitHub validates the whole
+    # call graph before the run starts and refuses it if a called job asks for
+    # more than the calling job was granted — even when that job is skipped by
+    # `if:`. The dispatcher's create-version route needs `contents: write` to
+    # push the provenance tag, so `permissions: {}` here is a startup failure.
+    permissions:
+      contents: write
     uses: ./.github/workflows/reusable-sf-ops-dispatch.yml
     with:
       operation: ${{ matrix.operation }}
@@ -64,7 +71,10 @@ jobs:
   reject-unknown-operation:
     name: Unknown operation must fail
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.negative-case }}
-    permissions: {}
+    # Same reason as above — the grant is validated against the call graph, not
+    # against the route this job takes.
+    permissions:
+      contents: write
     uses: ./.github/workflows/reusable-sf-ops-dispatch.yml
     with:
       operation: definitely-not-an-operation

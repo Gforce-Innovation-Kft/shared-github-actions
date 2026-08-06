@@ -115,9 +115,11 @@ jq -s --arg org "$ORG" --arg at "$generated_at" '
   echo "- **This org only** (\`$ORG\`). Forks and personal repos are not scanned."
   echo "- **Static \`uses:\` refs only.** A reference built at runtime, or one living in"
   echo "  a script rather than a \`uses:\`, is not detected."
-  echo "- **The pinned ref matters.** A consumer on \`@v1\` does not see changes on"
-  echo "  \`develop\`; one on \`@develop\` is affected the moment you push. Check the"
-  echo "  ref column before assuming a change is safe or that it has landed."
+  echo "- **The pinned ref matters.** A consumer on \`@v1\` or \`@v2\` does not see a merge"
+  echo "  to \`main\`; one on \`@main\` is affected the moment you merge. Check the ref"
+  echo "  column before assuming a change is safe or that it has landed."
+  echo "- **\`@v1\` predates the ADR 0002 rename.** Names in the \`@v1\` column are the old"
+  echo "  ones; those consumers are insulated until they re-pin to \`@v2\`."
   echo
 
   total=$(jq '[.assets[].consumers[].references[]] | length' "$OUT_JSON")

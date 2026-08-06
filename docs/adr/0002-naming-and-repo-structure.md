@@ -152,7 +152,7 @@ this way (`adr/`).
 
 ## Decision 6 — self-references point at `@develop` until a release is cut
 
-**Decision.** The fifteen absolute references from reusable workflows to this repository's own
+**Decision.** The nineteen absolute references from reusable workflows to this repository's own
 actions (for example `sf-release.yml` → `.../sf-delta-package@v1`) are rewritten to the new
 action names at `@develop`.
 
@@ -170,6 +170,32 @@ actions, so a change to an action is never smoke-tested before release.
 `@develop` to `@vX`, then tag. This is deliberate — it is the point at which the action set is
 declared stable — but it is a manual step that must be written into the release procedure in
 `CONTRIBUTING.md`.
+
+### Amendment (2026-08-06) — `develop` is retired; the refs are at `@v2`
+
+The `@develop` pin above was always meant to last until a release. It lasted until this change
+merged. `develop` merged into `main` and was **deleted**: the repository is single-branch, PRs
+open against `main`, and a `@develop` ref would name a branch that no longer resolves — a hard
+startup failure in every reusable workflow.
+
+So the nineteen self-references are rewritten to **`@v2`**, and `v2.0.0` is tagged from the merge
+commit. `release.yml` force-moves the floating `v2` tag, so the refs resolve as soon as the
+release exists. `v1` stays frozen at the pre-rename layout for existing consumers.
+
+**The cost, stated plainly.** Pointing self-references at a tag reintroduces the defect this
+decision originally fixed: `ci-sf-ops-dispatch-smoke.yml` now exercises PR-head *dispatcher*
+code against `@v2` *action* code, so a change to a composite action is not covered by the
+dispatcher smoke test until a release is cut. What still covers PR-head code:
+
+- `ci.yml`'s `smoke` job drives the TypeScript actions with `./` refs, so those are tested at
+  the PR head.
+- The composite Salesforce actions (`sf-org-login`, `sf-package-*`, `sf-org-scratch-create`,
+  `sf-ops-callback`) are **not**. Verify a change to one of those in a branch caller with an
+  explicit `@<branch>` ref before merging, per the procedure in `CONTRIBUTING.md`.
+
+The alternative — pinning self-references at `@main` — was rejected: a consumer on `@v2` would
+then silently execute moving action code from `main`, which is the reproducibility hole the tag
+pin exists to close.
 
 ## Consequences
 

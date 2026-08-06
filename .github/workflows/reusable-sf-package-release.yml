@@ -137,7 +137,7 @@ jobs:
           submodules: ${{ inputs.checkout-submodules }}
 
       - name: Salesforce Dev Hub login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: devhub
@@ -164,14 +164,14 @@ jobs:
 
       - name: Reuse existing scratch org
         if: ${{ steps.org-source.outputs.reuse == 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.scratch-org-auth-url }}
           org-alias: release-check
 
       - name: Create scratch org
         if: ${{ steps.org-source.outputs.reuse != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@v2
         with:
           definition-file: ${{ inputs.scratch-org-definition }}
           alias: release-check
@@ -281,7 +281,7 @@ jobs:
           fetch-depth: 0
 
       - name: Salesforce Dev Hub login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: devhub
@@ -289,7 +289,7 @@ jobs:
 
       - name: Create package version
         id: create
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-create@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-create@v2
         with:
           package: ${{ inputs.package }}
           dev-hub-alias: devhub

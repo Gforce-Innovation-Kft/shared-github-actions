@@ -31,14 +31,18 @@ on:
 
 jobs:
   analyze:
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
       actions: read
 ```
 
-**Important:** Replace `<your-org>` with your GitHub organization name or username.
+**The tag and the path move together.** `reusable-sf-code-analyze.yml` is the `v2` name.
+At `@v1` the same workflow is `salesforce-code-analyzer.yml` — so
+`reusable-sf-code-analyze.yml@v1` does not resolve, and neither does
+`salesforce-code-analyzer.yml@v2`. Pin `@v2` for new callers; the full rename mapping is
+in [ADR 0002](docs/adr/0002-naming-and-repo-structure.md).
 
 ### Step 4: Commit and Push
 
@@ -67,7 +71,7 @@ For private repositories:
 ### Using the Major Tag (Recommended)
 
 ```yaml
-uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
 ```
 
 **Pros:** Fixes and non-breaking features arrive automatically; breaking changes never do (they bump the major)
@@ -76,7 +80,7 @@ uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-
 ### Using Exact Release Tags
 
 ```yaml
-uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v1.0.0
+uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2.0.0
 ```
 
 **Pros:** Immutable, fully predictable behavior
@@ -90,13 +94,17 @@ any time. Never use `@main` in production callers.
 ## Creating a Release
 
 Push a semver tag from `main`; the [release workflow](.github/workflows/release.yml)
-creates the GitHub Release and force-moves the major tag (`v1`) automatically:
+creates the GitHub Release and force-moves the major tag (`v2`) automatically:
 
 ```bash
 git checkout main && git pull
-git tag v1.0.0
-git push origin v1.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
+
+A **major** bump has a manual step first — the reusable workflows' own self-references
+must be re-pinned to the new tag before tagging. Full procedure:
+[CONTRIBUTING.md](CONTRIBUTING.md#release-process).
 
 ## Testing Your Reusable Workflows
 

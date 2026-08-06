@@ -37,12 +37,14 @@ Feature suggestions are welcome! Please:
 #### Workflow for Changes
 
 1. **Fork the repository** (for external contributors)
-2. **Create a feature branch**
+2. **Create a feature branch off `main`** — `main` is the only long-lived branch; there
+   is no `develop`
    ```bash
+   git checkout main && git pull
    git checkout -b feature/your-feature-name
    ```
 3. **Make your changes**
-4. **Test your changes** thoroughly
+4. **Test your changes** — `npm run all` must pass (see Testing Guidelines)
 5. **Commit with clear messages**
    ```bash
    git commit -m "Add: Description of your changes"
@@ -51,7 +53,7 @@ Feature suggestions are welcome! Please:
    ```bash
    git push origin feature/your-feature-name
    ```
-7. **Create a Pull Request**
+7. **Open a Pull Request against `main`**
 
 #### Commit Message Guidelines
 
@@ -74,24 +76,30 @@ Examples:
 When adding a new reusable workflow:
 
 1. **Create the workflow file** in `.github/workflows/`
-   - Use descriptive naming: `feature-name.yml`
-   - Include `workflow_call` trigger
-   - Define clear inputs and outputs
+   - Name it `reusable-<domain>-<name>.yml` — the `reusable-` prefix is what marks a
+     `workflow_call` workflow as callable from other repositories. Unprefixed names are
+     reserved for this repo's own CI. See
+     [ADR 0002](docs/adr/0002-naming-and-repo-structure.md), decision 2.
+   - Include the `workflow_call` trigger
+   - Define typed inputs and outputs, and declare `secrets:` explicitly
+   - Self-references to this repo's actions must be **absolute** and pinned to the
+     current major tag — never `./`, never a branch
 
 2. **Document the workflow**
-   - Add comprehensive documentation to README.md
-   - Include usage examples
-   - Document all inputs and outputs
-   - Add examples to the `examples/` directory
+   - Add it to `README.md` (the summary a consumer reads) **and** `CLAUDE.md` (the
+     detailed input/output/permission contract). Both enumerate every workflow; a
+     new one missing from either is a documentation bug.
+   - Add a runnable caller to `examples/`, named after the workflow
+   - Record the *why* in `docs/adr/` if the change involves a design trade-off
 
 3. **Test the workflow**
-   - Create a test repository
-   - Add the workflow to the test repo
-   - Verify all scenarios work correctly
+   - Run `npm run all` locally and make sure it passes
+   - Verify all scenarios work correctly, including failure paths
    - Test with different input combinations
 
-4. **Update changelog**
-   - Add entry to CHANGELOG.md under [Unreleased]
+4. **Check the consumer catalog**
+   - `docs/usage-catalog.md` lists every known consumer. Read it before changing an
+     existing input, output, filename, or default — see the top of `CLAUDE.md`.
 
 ### Code Style Guidelines
 
@@ -137,11 +145,21 @@ on:
 
 Before submitting a PR:
 
-1. **Test the workflow** in a separate repository
+1. **Run `npm run all`** — format check, lint, typecheck, bundle, tests at the 95%
+   coverage gate, and `dist:verify`. CI runs the same thing and fails on a stale
+   committed `dist/`. This is not optional.
 2. **Verify all input combinations** work as expected
-3. **Check error handling** - test failure scenarios
+3. **Check error handling** — test failure scenarios
 4. **Validate outputs** are correctly exposed
 5. **Test with different permissions** to ensure they're correctly documented
+
+**What CI does and does not cover.** `ci.yml`'s `smoke` job drives the TypeScript
+actions with `./` refs, so those are exercised at your PR head.
+`ci-sf-ops-dispatch-smoke.yml` exercises the dispatcher at your PR head but resolves
+the *actions* it calls from the released `@v2` tag. So a change to a composite
+Salesforce action (`sf-org-login`, `sf-package-*`, `sf-org-scratch-create`,
+`sf-ops-callback`) is **not** covered by CI. Verify one of those from a scratch caller
+workflow with an explicit `@<your-branch>` ref before merging.
 
 ### Pull Request Process
 
@@ -166,46 +184,99 @@ PRs will be reviewed for:
 ### Prerequisites
 
 - Git
-- GitHub account
-- Text editor or IDE
+- **Node 20+** — this is an npm-workspaces monorepo; the TypeScript actions are built here
+- `gh` and `jq` if you need to regenerate the consumer catalog
 - Access to a test GitHub repository
 
 ### Local Development
 
-1. Clone the repository:
+1. Clone the repository and install workspaces:
    ```bash
-   git clone https://github.com/<your-org>/shared-github-action.git
-   cd shared-github-action
+   git clone https://github.com/Gforce-Innovation-Kft/shared-github-actions.git
+   cd shared-github-actions
+   npm ci
    ```
 
-2. Create a test branch:
+2. Branch off `main` — it is the only long-lived branch:
    ```bash
    git checkout -b test/my-changes
    ```
 
-3. Make your changes
+3. Make your changes, then:
+   ```bash
+   npm run all          # format:check + lint + typecheck + bundle + test + dist:verify
+   ```
+   A pre-commit hook rebuilds and re-stages the action bundles. Useful subsets:
+   `npm run test:all`, `npm run bundle:all`, `npm run typecheck:all`.
 
 4. Test in a separate repository by referencing your branch:
    ```yaml
-   uses: <your-username>/shared-github-action/.github/workflows/workflow-name.yml@test/my-changes
+   uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-pr-validate.yml@test/my-changes
    ```
+   A branch ref is the only way to exercise a changed **composite** action end to end —
+   see the coverage note under Testing Guidelines.
 
 ## Release Process
 
-Maintainers release by pushing a semver tag from `main`; automation does the rest:
+Maintainers release by pushing a semver tag from `main`; automation does the rest.
+
+### Patch or minor release
 
 1. Make sure `main` is green and contains everything for the release
 2. Tag and push:
    ```bash
    git checkout main && git pull
-   git tag v1.2.0
-   git push origin v1.2.0
+   git tag v2.1.0
+   git push origin v2.1.0
    ```
 3. `.github/workflows/release.yml` then:
    - creates the GitHub Release with generated notes
-   - force-moves the floating major tag (`v1`) to the same commit
-4. Breaking change? Bump the major (`v2.0.0`) — callers pinned to `@v1` keep
-   working until they opt in to `@v2`
+   - force-moves the floating major tag (`v2`) to the same commit
+
+Because the self-references below are pinned to the floating `@v2`, a patch or minor
+release needs no ref rewrite — moving `v2` moves them.
+
+### Major release — the manual step you must not skip
+
+The reusable workflows reference this repository's *own* actions with absolute refs
+(a `./` ref inside a `workflow_call` workflow resolves against the **caller's**
+checkout, so relative refs are impossible). Those refs name a tag, and on a major bump
+they must be rewritten **before** the tag is pushed, or `@vN` ships workflows that
+still call `@vN-1` actions. See
+[ADR 0002](docs/adr/0002-naming-and-repo-structure.md), decision 6 and its amendment.
+
+```bash
+git checkout main && git pull
+git checkout -b release/v3.0.0
+
+# Rewrite every self-reference, workflows AND composite action manifests.
+# sf-org-login/action.yml holds one too — do not grep only .github/workflows.
+grep -rl 'shared-github-actions/\.github/' .github/workflows .github/actions \
+  --include='*.yml' \
+  | xargs sed -i '' -E \
+      's|(Gforce-Innovation-Kft/shared-github-actions/\.github/(actions\|workflows)/[A-Za-z0-9._-]+)@v2|\1@v3|g'
+
+# Verify: expect 20 hits, and zero on the old tag or any branch name.
+grep -rc 'shared-github-actions/\.github/.*@v3' .github/workflows .github/actions
+grep -rn 'shared-github-actions/\.github/.*@\(v2\|main\|develop\)' .github/ || echo clean
+```
+
+Then open the PR, merge it, and tag the merge commit:
+
+```bash
+git checkout main && git pull
+git tag v3.0.0 && git push origin v3.0.0
+```
+
+The refs resolve as soon as `release.yml` force-moves `v3` — which it does in the same
+run that creates the Release.
+
+Also on a major bump:
+- Update the migration note and pin examples in `README.md`, `GETTING_STARTED.md`,
+  `examples/README.md` and `CLAUDE.md` — they name the current major explicitly.
+- Regenerate the consumer catalog on `main`: `./.github/scripts/build-usage-catalog.sh`.
+  A rename makes the committed catalog report the old names.
+- Callers pinned to `@v2` keep working until they opt in to `@v3`.
 
 ## Questions?
 

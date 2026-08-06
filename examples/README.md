@@ -1,16 +1,29 @@
 # Examples
 
-This directory contains example workflows showing how to use the shared GitHub Actions in different scenarios.
+Runnable caller workflows for the shared actions. Copy one into your repo's
+`.github/workflows/`, adjust the inputs, and commit.
 
-> **⚠️ These pin `@v2`, which is not cut yet.**
-> The action and workflow names here follow the convention in
-> [ADR 0002](../docs/adr/0002-naming-and-repo-structure.md); those paths exist on
-> `develop` and `main` but at no tag. `v1` is frozen at the *pre-rename* layout.
->
-> Until `v2` is tagged, either pin `@main` (accepting that it moves) or use `@v1`
-> with the old names: `get-aws-secret`, `create-release-pr`, `sync-branches`,
-> `sf-delta-package`, `sf-find-tests`, `sf-scratch-org`, and workflows without the
-> `reusable-` prefix. Once `v2` exists these examples are correct as written.
+Every example pins **`@v2`** — the first tag carrying the
+[ADR 0002](../docs/adr/0002-naming-and-repo-structure.md) names. `v1` is frozen at the
+pre-rename layout, so on `@v1` these paths do not resolve; the old names are
+`get-aws-secret`, `create-release-pr`, `sync-branches`, `sf-delta-package`,
+`sf-find-tests`, and workflows without the `reusable-` prefix.
+
+## Files in this directory
+
+| File | Calls |
+|---|---|
+| [`reusable-sf-pr-validate.yml`](reusable-sf-pr-validate.yml) | `reusable-sf-pr-validate.yml` — PR code health |
+| [`reusable-sf-release.yml`](reusable-sf-release.yml) | `reusable-sf-release.yml` — validate on PR, gated deploy on merge |
+| [`github-branch-sync.yml`](github-branch-sync.yml) | the `github-branch-sync` action |
+| [`github-release-pr-create.yml`](github-release-pr-create.yml) | the `github-release-pr-create` action |
+
+The Code Analyzer snippets further down are inline only — there is no file for each.
+For the two workflows with no example file here, the caller templates live with their
+docs: `reusable-sf-ops-dispatch.yml` in
+[docs/consuming-sf-dispatch.md](../docs/consuming-sf-dispatch.md), and
+`reusable-sf-package-release.yml` is normally reached through the dispatcher rather
+than called directly.
 
 ## Salesforce CI/CD Pair
 
@@ -26,8 +39,9 @@ Release: delta validation on PRs, gated quick deploy on merge. On PRs it
 check-only deploys the delta against the target org and records the deploy
 request; on merge to main the `devhub` GitHub Environment holds the
 required-reviewer gate before the validated request is quick-deployed
-(fallback delta → full). Includes the `workflow_dispatch` bootstrap path
-(`gh workflow run sf-release.yml -f full-deploy=true`).
+(fallback delta → full). Includes the `workflow_dispatch` bootstrap path — save the
+example as `.github/workflows/release.yml`, then
+`gh workflow run Release -f full-deploy=true`.
 
 Full setup guide: [docs/consuming-sf-cicd.md](../docs/consuming-sf-cicd.md).
 
@@ -35,7 +49,7 @@ Full setup guide: [docs/consuming-sf-cicd.md](../docs/consuming-sf-cicd.md).
 
 ### Example 1: Basic PR Check
 
-**File:** `salesforce-analyzer-basic.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Runs code analysis on every pull request with default settings.
 
@@ -46,7 +60,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -55,7 +69,7 @@ jobs:
 
 ### Example 2: Legacy Codebase (Changed Files Only)
 
-**File:** `salesforce-analyzer-legacy.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Only checks changed files - useful for large legacy codebases where fixing all violations at once is impractical.
 
@@ -66,7 +80,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -79,7 +93,7 @@ jobs:
 
 ### Example 3: Gradual Improvement Strategy
 
-**File:** `salesforce-analyzer-gradual.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Allows a limited number of violations to decrease over time.
 
@@ -90,7 +104,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -103,7 +117,7 @@ jobs:
 
 ### Example 4: Multiple Directories
 
-**File:** `salesforce-analyzer-multi-dir.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Analyzes multiple directories separately.
 
@@ -114,7 +128,7 @@ on:
 
 jobs:
   analyze-force-app:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -124,7 +138,7 @@ jobs:
       results-artifact-name: 'force-app-results'
 
   analyze-apex-common:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -136,7 +150,7 @@ jobs:
 
 ### Example 5: Scheduled Analysis
 
-**File:** `salesforce-analyzer-scheduled.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Runs analysis on a schedule (e.g., nightly) on the main branch.
 
@@ -149,7 +163,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -162,7 +176,7 @@ jobs:
 
 ### Example 6: Using Outputs
 
-**File:** `salesforce-analyzer-with-outputs.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Demonstrates using the workflow outputs in downstream jobs.
 
@@ -173,7 +187,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -202,7 +216,7 @@ jobs:
 
 ### Example 7: Matrix Strategy
 
-**File:** `salesforce-analyzer-matrix.yml`
+**Inline snippet** — copy the YAML below; there is no file for this variant.
 
 Runs analysis with different configurations in parallel.
 
@@ -224,7 +238,7 @@ jobs:
             fail-sev1: true
             fail-sev2: false
             max-violations: 10
-    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-code-analyze.yml@v2
     permissions:
       pull-requests: write
       contents: read
@@ -239,13 +253,20 @@ jobs:
 ## Using These Examples
 
 1. Copy the example that best matches your use case
-2. Replace `<your-org>` with your GitHub organization or username
-3. Adjust the parameters as needed for your project
-4. Save to `.github/workflows/` in your repository
+2. Save it to `.github/workflows/` in your repository
+3. Adjust the inputs for your project
+4. Add the secrets the workflow declares — `DEVHUB_AUTH_URL` for the CI/CD pair; the
+   Code Analyzer examples need none
 5. Commit and push to activate the workflow
+
+The `uses:` lines already name `Gforce-Innovation-Kft/shared-github-actions` and pin
+`@v2` — leave them as they are unless you have forked this repo.
 
 ## Additional Resources
 
 - [Getting Started Guide](../GETTING_STARTED.md)
 - [Main README](../README.md)
+- [Pipeline map](../docs/pipeline-map.md) — the whole system on one page
+- [Consuming the SF CI/CD pair](../docs/consuming-sf-cicd.md)
+- [Consuming the SF dispatch layer](../docs/consuming-sf-dispatch.md)
 - [Salesforce Code Analyzer Documentation](https://forcedotcom.github.io/sfdx-scanner/)
