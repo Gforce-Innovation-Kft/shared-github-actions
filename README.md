@@ -5,12 +5,12 @@ core + thin adapters), **composite actions**, and **callable workflows** for
 Salesforce CI/CD. Reference them from any repo in the org.
 
 ```text
-TypeScript action: Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
-Composite action:  Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
-Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v1
+TypeScript action: Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v2
+Composite action:  Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v2
+Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v2
 ```
 
-See [Versioning](#versioning) for how to pin (`@v1`, `@v1.2.0`, or a full
+See [Versioning](#versioning) for how to pin (`@v2`, `@v2.0.0`, or a full
 commit SHA — avoid `@main` in production callers).
 
 **Naming** ([ADR 0002](docs/adr/0002-naming-and-repo-structure.md)): actions are
@@ -18,8 +18,13 @@ commit SHA — avoid `@main` in production callers).
 `github-branch-sync`); workflows you may call are prefixed `reusable-`, and
 anything unprefixed is this repo's own CI.
 
-> `v1` is frozen at the pre-rename layout, so callers pinned to `@v1` keep
-> working. The names below land in the next major tag.
+> **Pin `@v2` for everything below.** `v1` is frozen at the pre-rename layout and
+> contains only `get-aws-secret`, `create-release-pr`, `sync-branches`,
+> `sf-delta-package`, `sf-find-tests`, `sf-jwt-login`, `sf-org-login`, plus the
+> unprefixed `salesforce-code-analyzer.yml`, `sf-pr-validate.yml` and
+> `sf-release.yml`. Everything else on this page — the `sf-package-*` actions,
+> `sf-org-scratch-create`, `sf-ops-callback`, the dispatcher — does not exist at
+> `@v1` at all, so a `@v1` ref to one of those fails to resolve.
 
 **New here?** [`docs/pipeline-map.md`](docs/pipeline-map.md) is the whole system
 on one page: flow diagrams of the four layers, the Salesforce dispatch chain, and
@@ -112,6 +117,17 @@ matches plus a reference scan of test classes in the source tree.
   [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md) and
   [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
 
+- **`reusable-sf-package-release.yml`** — **L2, the 2GP release pipeline**:
+  `validate` (the only job that spends a scratch org — skip it with
+  `run-validate: false`) → `package` (`sf-package-create`, then push the annotated
+  `pkg/<package>/<versionNumber>` provenance tag) → `release` (cut the GitHub
+  Release; runs even when validation was skipped). Jobs are ordered by cost, not
+  dependency: a tree that does not compile spends zero of the 6/day validated
+  package creates. Outputs `version-id` (`04t`), `version-number`, `git-tag`.
+  Secrets: `sfdx-auth-url` (required, Dev Hub), `scratch-org-auth-url` (optional —
+  validate in an existing org and keep it, for debugging the flow). Caller needs
+  `contents: write`.
+
 - **`reusable-sf-code-analyze.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
   `actions: read`.
@@ -138,8 +154,10 @@ matches plus a reference scan of test classes in the source tree.
 
 ### Internal CI (not callable)
 
-Workflows without the `reusable-` prefix are this repo's own CI: `ci.yml`,
-`ci-sf-ops-dispatch-smoke.yml`, and `release.yml`.
+Workflows without the `reusable-` prefix are this repo's own CI: `ci.yml`
+(quality + smoke), `ci-sf-ops-dispatch-smoke.yml` (routes all three dispatcher
+operations with `dry-run: true`), `catalog-refresh.yml` (weekly consumer rescan,
+opens a PR on drift), and `release.yml` (tag → Release + floating major tag).
 
 ## Versioning
 
@@ -147,16 +165,28 @@ Releases follow semver, published as git tags with a floating major tag:
 
 | Pin | Example | Behavior |
 |-----|---------|----------|
-| Major tag | `@v1` | **Recommended.** Moves with every non-breaking release; you get fixes automatically. |
-| Exact tag | `@v1.2.0` | Immutable; bump manually. |
+| Major tag | `@v2` | **Recommended.** Moves with every non-breaking release; you get fixes automatically. |
+| Exact tag | `@v2.0.0` | Immutable; bump manually. |
 | Commit SHA | `@93cb6ef…` | Strictest supply-chain pin; pair with Dependabot to stay current. |
 | `@main` | — | Development only. Unreleased, may break at any time. |
 
 Pushing a `vX.Y.Z` tag triggers [`release.yml`](.github/workflows/release.yml),
 which creates the GitHub Release and force-moves the `vX` major tag. Breaking
 changes bump the major (callers on the old `@v1` are unaffected until they move
-to `@v2`). The release procedure for maintainers is in
-[CONTRIBUTING.md](CONTRIBUTING.md#release-process).
+to `@v2`).
+
+`v2.0.0` is the breaking release: it renames every action and workflow per
+[ADR 0002](docs/adr/0002-naming-and-repo-structure.md). Migrating from `@v1` means
+changing the paths in your `uses:` lines, not just the tag — the mapping table is
+in decisions 1 and 2 of that ADR.
+
+The release procedure for maintainers is in
+[CONTRIBUTING.md](CONTRIBUTING.md#release-process). It has a manual step: a major
+bump must rewrite the reusable workflows' own self-references to the new tag
+*before* tagging.
+
+**Development happens on `main`.** `develop` was merged and deleted on 2026-08-06 —
+open PRs against `main`.
 
 ## Repository Layout
 
@@ -170,8 +200,12 @@ gforce-gha-src/                    # ALL TypeScript implementation (single sourc
 .github/actions/<name>             # action.yml + entry index.ts + committed esbuild dist/index.js
 .github/actions/aws-secret-get     # composite actions
 .github/workflows                  # CI + reusable workflows
+.github/scripts                    # build-usage-catalog.sh (regenerates docs/usage-catalog.*)
 examples/                          # runnable caller workflows
-docs/                              # architecture + authoring guides
+docs/                              # architecture + authoring guides + pipeline map
+docs/adr/                          # architecture decision records
+.agents/skills/                    # vendored agent skills (symlinked into .claude/skills/)
+skills-lock.json                   # content hashes for the vendored skills
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the layering and
@@ -193,7 +227,7 @@ rebuilds and re-stages action bundles; CI's `dist:verify` fails on a stale bundl
 
 ## Conventions
 
-- Reference actions/workflows by release tag (`@v1`, `@v1.2.0`) — see
+- Reference actions/workflows by release tag (`@v2`, `@v2.0.0`) — see
   [Versioning](#versioning); never `@main` in production.
 - Third-party actions in this repo are pinned to full commit SHAs with a
   `# vX.Y.Z` comment; Dependabot keeps them current.

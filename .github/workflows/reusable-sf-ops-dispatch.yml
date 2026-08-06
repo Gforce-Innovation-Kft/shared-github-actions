@@ -219,7 +219,7 @@ jobs:
     if: ${{ needs.normalize.outputs.valid == 'true' && needs.normalize.outputs.operation == 'create-version' && needs.normalize.outputs.dry-run != 'true' }}
     permissions:
       contents: write
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-package-release.yml@develop
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-package-release.yml@v2
     with:
       package: ${{ needs.normalize.outputs.package }}
       source-dirs: ${{ inputs.source-dirs }}
@@ -272,7 +272,7 @@ jobs:
     steps:
       - name: Salesforce Dev Hub login
         if: ${{ needs.normalize.outputs.dry-run != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.dev-hub-auth-url }}
           org-alias: devhub
@@ -281,7 +281,7 @@ jobs:
       - name: Promote version
         id: promote
         if: ${{ needs.normalize.outputs.dry-run != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-promote@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-promote@v2
         with:
           version-id: ${{ needs.normalize.outputs.version-id }}
           dev-hub-alias: devhub
@@ -320,7 +320,7 @@ jobs:
     steps:
       - name: Target org login
         if: ${{ needs.normalize.outputs.dry-run != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.target-org-auth-url }}
           org-alias: ${{ needs.normalize.outputs.target-org-alias }}
@@ -328,7 +328,7 @@ jobs:
       - name: Install version
         id: install
         if: ${{ needs.normalize.outputs.dry-run != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-install@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-install@v2
         with:
           version-id: ${{ needs.normalize.outputs.version-id }}
           target-org-alias: ${{ needs.normalize.outputs.target-org-alias }}
@@ -417,14 +417,14 @@ jobs:
 
       - name: Callback org login
         if: ${{ needs.normalize.outputs.correlation-id != '' && needs.normalize.outputs.dry-run != 'true' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.callback-auth-url }}
           org-alias: callback
 
       - name: Report to Salesforce
         if: ${{ needs.normalize.outputs.correlation-id != '' }}
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-ops-callback@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-ops-callback@v2
         with:
           correlation-id: ${{ needs.normalize.outputs.correlation-id }}
           operation: ${{ needs.normalize.outputs.operation || 'unknown' }}

@@ -96,16 +96,16 @@ jobs:
 
       # Own-repo absolute refs: a `./` ref inside a reusable workflow resolves
       # against the *caller's* checkout, so self-references must be absolute.
-      # Pinned to @develop until a release is cut — see ADR 0002, decision 6.
+      # Pinned to the floating major tag @v2 — see ADR 0002, decision 6.
       - name: Salesforce Dev Hub login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: devhub
           set-default-dev-hub: 'true'
 
       - name: Create scratch org
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@v2
         with:
           definition-file: ${{ inputs.scratch-org-definition }}
           alias: ci-scratch

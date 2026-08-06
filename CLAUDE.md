@@ -16,8 +16,15 @@ Recorded in [ADR 0002](docs/adr/0002-naming-and-repo-structure.md). Two rules:
   So `sf-package-create`, `aws-secret-get`, `github-branch-sync`. Never verb-first.
 - **Workflows** whose trigger is `workflow_call` are `reusable-<domain>-<name>.yml`.
   Anything unprefixed is this repo's own CI (`ci.yml`, `release.yml`,
-  `ci-sf-ops-dispatch-smoke.yml`). GitHub forbids subdirectories under
-  `.github/workflows/`, so the name is the only available separator.
+  `ci-sf-ops-dispatch-smoke.yml`, `catalog-refresh.yml`). GitHub forbids
+  subdirectories under `.github/workflows/`, so the name is the only available
+  separator.
+
+## Branching
+
+**Single branch: `main`.** `develop` was merged and deleted on 2026-08-06 — open
+PRs against `main`. There is no long-lived integration branch, so nothing in this
+repo may reference `@develop`; see the ADR 0002 amendment.
 
 ## Before you change ANY action or workflow: check the usage catalog
 
@@ -30,13 +37,19 @@ machine-readable twin at [`docs/usage-catalog.json`](docs/usage-catalog.json).
 changing a default:**
 
 1. Read the catalog entry for the asset you are touching.
-2. Note the **pinned ref** of each consumer. `@develop` consumers break the moment
-   you push; `@v1` consumers are insulated until a release re-points them.
+2. Note the **pinned ref** of each consumer. A consumer on `@main` breaks the moment
+   you merge; one on `@v1` or `@v2` is insulated until that major tag moves.
 3. If the catalog shows no consumers, confirm with the human — the scan covers
    default branches in this org only, so a consumer on a feature branch is
    invisible. Its "Scope and limitations" section spells out what it cannot see.
 4. Regenerate after adding a consumer: `./.github/scripts/build-usage-catalog.sh`
    (needs `gh` + `jq`). CI refreshes it weekly via `catalog-refresh.yml`.
+
+The scan needs org-wide read access, which the default `GITHUB_TOKEN` does not have —
+`catalog-refresh.yml` uses the `CATALOG_SCAN_TOKEN` repository secret and falls back to
+`github.token`. On the fallback the scan sees only this repo, so the workflow fails
+deliberately when it finds zero references rather than committing a false all-clear.
+**Regenerate the catalog on `main` right after any rename**, or it reports the old names.
 
 A default is a breaking change when the old behaviour was load-bearing. Changing
 `container-user` from `root` to `1001`, for instance, breaks every consumer whose
@@ -46,16 +59,21 @@ sf-docker-images v3.0.0.
 ## Reference Pattern
 
 From other repos, reference items using:
-- Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v1`
-- Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v1`
+- Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v2`
+- Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v2`
 
-`v1` is frozen at the pre-rename layout, so existing consumers keep working. The
-renamed actions land in the next major tag.
+**`v2` is the first tag carrying the ADR 0002 names.** `v1` is frozen at the
+pre-rename layout — its assets are `get-aws-secret`, `create-release-pr`,
+`sync-branches`, `sf-delta-package`, `sf-find-tests`, `sf-jwt-login`,
+`sf-org-login`, and the unprefixed `salesforce-code-analyzer.yml`,
+`sf-pr-validate.yml`, `sf-release.yml`. Nothing added since (`sf-package-*`,
+`sf-org-scratch-create`, `sf-ops-callback`, the dispatcher) exists at `@v1`, so
+a `@v1` ref to one of those 404s. Re-point consumers to `@v2` when they migrate.
 
 **Self-references inside a reusable workflow** must be absolute — a `./` ref
-resolves against the *caller's* repo, not this one. They are pinned to
-`@develop` until a release is cut; rewriting them to `@vX` is a release step
-(ADR 0002, decision 6).
+resolves against the *caller's* repo, not this one. All nineteen are pinned to
+the floating `@v2` tag. Moving them to `@vX+1` is a release step (ADR 0002,
+decision 6 and its amendment); never point them at a branch.
 
 ## Pipeline Layers (L1–L4)
 
@@ -256,7 +274,7 @@ PR code health, one half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`).
 **Outputs:** none declared
 **Caller permissions:** `contents: read`
 
-### `sf-release` (`.github/workflows/reusable-sf-release.yml`)
+### `reusable-sf-release` (`.github/workflows/reusable-sf-release.yml`)
 
 One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consuming-sf-cicd.md`). On `pull_request`: `sf-source-delta` → `sf-apex-test-select` (naming + reference scan) → check-only deploy against the target org (`RunSpecifiedTests`, falling back to `RunLocalTests` when Apex changed but no covering tests were found; no test run for metadata-only deltas) → `validation.json` quick-deploy handoff uploaded in the `sf-release-<run_number>` artifact. On `push` to main (or `workflow_dispatch`): behind the caller's `environment` gate, quick-deploys the validated request (looked up merge-commit → PR → head SHA → `sf-release-*` artifact; valid only if org id + head SHA match and <10 days old) → fallback delta deploy (same recorded test plan) → fallback full deploy of **all** `packageDirectories` (`full-deploy: true` forces this — the bootstrap path). Uploads the `sf-deploy-<run_number>` audit artifact (delta manifest, deploy result, JUnit tests, quick-deploy decision).
 
@@ -266,7 +284,40 @@ One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consumi
 **Outputs:** `component-count`, `deploy-request-id`, `tests` (PR runs); `deploy-id`, `quick-deployed` (push runs)
 **Caller permissions:** `contents: read`, `actions: read`
 
-### `sf-ops-dispatch` (`.github/workflows/reusable-sf-ops-dispatch.yml`)
+### `reusable-sf-package-release` (`.github/workflows/reusable-sf-package-release.yml`)
+
+**L2 — the 2GP release pipeline.** Three jobs, ordered by cost rather than by
+dependency: `validate` → `package` → `release`. Scratch orgs are capped per Dev Hub
+(concurrently *and* daily) and validated package creates at 6/day, so validation
+runs first — a tree that does not compile spends zero creates.
+
+- **`validate`** (skippable via `run-validate: false`) is the only job that consumes a
+  scratch org: `sf-org-scratch-create`, deploy `source-dirs`, run `test-level`, then
+  delete the org in `if: always()`. Passing the `scratch-org-auth-url` secret makes it
+  log into an **existing** org and *not* delete it — for iterating on the release flow
+  without burning a scratch org per attempt.
+- **`package`** needs only the Dev Hub: `sf-package-create`, then pushes the annotated
+  provenance tag `pkg/<package>/<versionNumber>` carrying the `04t`/`05i`/`08c` ids and
+  the commit. Tagging lives here, not in the action (ADR 0002, decision 4). An existing
+  tag is a notice, not a failure, so a re-run is safe.
+- **`release`** touches no Salesforce at all — it cuts the GitHub Release on that tag.
+  It runs even when `validate` was skipped.
+
+**Key inputs:** `package`, `container-image`, `container-user` (default `root`, see below), `checkout-submodules`, `scratch-org-definition`, `source-dirs`, `run-validate` (default `true`), `test-level` (default `RunLocalTests`), `code-coverage` (default `false`), `skip-validation`, `wait-minutes` (default `60`), `create-github-release` (default `true`), `retention-days`
+**Secrets:** `sfdx-auth-url` (required, Dev Hub), `scratch-org-auth-url` (optional)
+**Outputs:** `version-id` (`04t`), `version-number`, `git-tag`
+**Caller permissions:** `contents: write` (`package` pushes the tag, `release` cuts the release)
+
+`source-dirs` empty deploys **every** `packageDirectories` entry, which fails if an
+unrelated entry needs a `replacements` env var — pass the package under release *and*
+its dependency directories.
+
+`container-user` defaults to `root` only because the published
+`gforceinnovation/sf-ci:latest` has no passwd entry for UID 1001 and `sf` crashes on a
+UID it cannot resolve. Flip the default to `1001` once sf-docker-images v3.0.0 ships —
+that is the entire point of the input, and until then it is a breaking change to flip.
+
+### `reusable-sf-ops-dispatch` (`.github/workflows/reusable-sf-ops-dispatch.yml`)
 
 **L3 — the single external entry point.** Salesforce (LWC → Apex → GitHub App JWT → dispatch API) asks for one operation; this routes it to exactly one path and reports the terminal status back. Design record: [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md). Salesforce-side contract: [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
 
@@ -302,10 +353,25 @@ which drives the local actions with `./` refs and asserts their declared outputs
 
 Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion *is* a red run: a job calling a reusable workflow cannot take `continue-on-error`.
 
+**Its `permissions:` must cover the widest grant any job in the dispatcher requests —
+`contents: write`, for the `create-version` route's provenance tag — even though a
+dry run never takes that route.** GitHub validates the entire call graph before the
+run starts and refuses it when a called job asks for more than the calling job was
+granted, `if:`-skipped or not. This is why the workflow sat in `startup_failure` from
+the day it was added until 2026-08-06: it granted `permissions: {}`. A startup failure
+produces no check run, so it never appeared as a red check on a PR — if this workflow
+seems to be passing, confirm it actually *ran*.
+
+### `catalog-refresh.yml`
+Weekly (and on `workflow_dispatch`): re-runs `.github/scripts/build-usage-catalog.sh` and
+opens a PR when `docs/usage-catalog.{md,json}` moved. The catalog is generated — never
+hand-edit it.
+
 ### `release.yml`
 On a `vX.Y.Z` tag push: creates the GitHub Release and force-moves the floating `vX` tag.
-**Before tagging, rewrite the reusable workflows' `@develop` self-references to `@vX`** — see
-ADR 0002, decision 6.
+**A major bump is a two-step release:** rewrite the reusable workflows' self-references
+from the current `@vX` to `@vX+1` *first*, then tag — see ADR 0002, decision 6 and its
+amendment, and the procedure in CONTRIBUTING.md.
 
 ## Authoring Conventions
 
@@ -314,30 +380,49 @@ ADR 0002, decision 6.
 - All shell steps in composite actions must specify `shell: bash`.
 - Commit messages use prefix format: `Add:`, `Fix:`, `Update:`, `Docs:`, `Test:`, `Refactor:`.
 - Always clean up sensitive files (keys, credentials) in an `if: always()` step.
+- Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment;
+  Dependabot updates both. Its `directories:` list must name every action directory
+  that contains a `uses:` — only `aws-secret-get` and `sf-org-login` do today, and a
+  new composite action with a third-party `uses:` must be added there or it goes
+  unwatched.
 
-## Installed Skills
-
-Repo-scoped skills live in `.agents/skills/` (symlinked into `.claude/skills/`).
-Invoke the relevant one when the task matches:
-
-| Skill | Use when |
-|-------|----------|
-| `github-actions-docs` | Authoring/editing workflows or `action.yml` — keeps YAML aligned with current GitHub Actions syntax (composite/reusable/TypeScript action patterns). |
-| `requesting-code-review` | Preparing a change for review (e.g. before a `github-release-pr-create` / `github-branch-sync` PR). |
-| `receiving-code-review` | Responding to review feedback on a PR. |
-| `code-review` | Reviewing TypeScript for quality/correctness (`packages/core` + action adapters). |
-
-Manage with `npx skills check` / `npx skills update`.
+> **Known deviation — 20 tag-pinned refs.** `ci.yml`, `release.yml` and both composite
+> action manifests are correctly SHA-pinned, but the five newer workflows
+> (`reusable-sf-{package-release,release,ops-dispatch,pr-validate}.yml`,
+> `catalog-refresh.yml`) still pin `actions/checkout@v7`, `actions/upload-artifact@v7`,
+> `actions/download-artifact@v8`, `actions/github-script@v9` and
+> `peter-evans/create-pull-request@v7` by tag. `peter-evans/create-pull-request` is the
+> one that matters most — it is not a GitHub-owned action and runs with
+> `contents: write` + `pull-requests: write`. Convert these to SHAs; do not add new
+> tag-pinned refs.
 
 <!-- skills-tooling -->
 ## Skills & AI tooling
 
-**External skills** (lockfile-managed — update with `npx skills check` / `npx skills update`):
-- `code-review` — from mattpocock/skills
-- `github-actions-docs` — from xixu-me/skills
-- `github-actions-templates` — from wshobson/agents
-- `receiving-code-review` — from obra/superpowers
-- `requesting-code-review` — from obra/superpowers
+Eight repo-scoped skills are committed. They live in `.agents/skills/`, are symlinked
+into `.claude/skills/`, and are pinned by content hash in
+[`skills-lock.json`](skills-lock.json). All are vendored from upstream — check and
+update them with `npx skills check` / `npx skills update`; do not hand-edit a
+vendored `SKILL.md`, since the next `update` overwrites it and the hash check will
+flag the drift.
+
+Invoke the relevant one when the task matches:
+
+| Skill | Upstream | Use when |
+|-------|----------|----------|
+| `github-actions-docs` | xixu-me/skills | Authoring or editing a workflow / `action.yml` — keeps YAML aligned with current GitHub Actions syntax (composite, reusable, TypeScript action patterns). The default for most work in this repo. |
+| `github-actions-templates` | wshobson/agents | Scaffolding a *new* workflow from a known-good shape, rather than editing an existing one. |
+| `code-review` | mattpocock/skills | Reviewing the TypeScript under `gforce-gha-src/` for quality and correctness. |
+| `requesting-code-review` | obra/superpowers | Preparing a change for review, before opening the PR. |
+| `receiving-code-review` | obra/superpowers | Responding to review feedback on a PR. |
+| `dx-org-manage` | forcedotcom/sf-skills | Running scratch-org or snapshot operations against a real org by hand — reproducing what `sf-org-scratch-create` and the `validate` job do, when debugging why they fail. |
+| `dx-org-permission-set-assign` | forcedotcom/sf-skills | Assigning permission sets to org users — the step `reusable-sf-pr-validate` performs inside its scratch org. |
+| `dx-pkg-post-install-configure` | forcedotcom/sf-skills | Post-install configuration of a managed package — what a consumer does *after* `sf-package-install` lands a version. |
+
+The three `dx-*` skills execute SF CLI operations against a live org. They are here
+because this repo's composite actions wrap those same commands, so the skills are how
+you reproduce a failing pipeline step interactively. They are **not** a way to change
+pipeline behaviour: an action's behaviour lives in its `action.yml`.
 
 **Global tooling available in every session:** lean-ctx (prefer `ctx_*` MCP tools for reads/search/shell — token-compressed), superpowers process skills, and graphify (no graph built for this repo).
 <!-- /skills-tooling -->

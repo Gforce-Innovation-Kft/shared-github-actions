@@ -125,10 +125,10 @@ runs:
 
     # --- auth-method: jwt -----------------------------------------------------
     # Own-repo ref: composite actions cannot use relative paths, so this resolves
-    # at runtime against the released tag.
+    # at runtime against the released tag — see ADR 0002, decision 6.
     - name: Get Salesforce credentials from AWS Secrets Manager
       if: ${{ inputs.auth-method == 'jwt' }}
-      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/aws-secret-get@develop
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/aws-secret-get@v2
       with:
         aws-region: ${{ inputs.aws-region }}
         secret-name: ${{ inputs.secret-name }}

@@ -96,11 +96,11 @@ jobs:
 
       # Own-repo absolute refs below: a `./` ref inside a reusable workflow
       # resolves against the *caller's* checkout, so self-references must be
-      # absolute. Pinned to @develop until a release is cut — see ADR 0002,
+      # absolute, and pinned to the floating major tag @v2 — see ADR 0002,
       # decision 6, and the release procedure in CONTRIBUTING.md.
       - name: Generate delta package
         id: delta
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-source-delta@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-source-delta@v2
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: HEAD
@@ -109,7 +109,7 @@ jobs:
       - name: Select relevant Apex tests
         id: find-tests
         if: steps.delta.outputs.has-changes == 'true'
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-apex-test-select@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-apex-test-select@v2
         with:
           package-xml: ${{ steps.delta.outputs.package-path }}
 
@@ -138,7 +138,7 @@ jobs:
       - name: Salesforce login
         id: login
         if: steps.delta.outputs.has-changes == 'true'
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: validation
@@ -258,7 +258,7 @@ jobs:
 
       - name: Salesforce login
         id: login
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
         with:
           sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
           org-alias: ${{ vars.SF_ORG_ALIAS || inputs.environment }}
@@ -395,7 +395,7 @@ jobs:
       - name: Generate delta package
         id: delta
         if: steps.resolve-from.outputs.delta-valid == 'true'
-        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-source-delta@develop
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-source-delta@v2
         with:
           from-ref: ${{ steps.resolve-from.outputs.from-ref }}
           to-ref: HEAD
