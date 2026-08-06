@@ -66,20 +66,21 @@ Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSO
 **Inputs:** `aws-region` (default `eu-central-1`), `secret-name`, `aws-role-arn`
 **Outputs:** None declared. Secret fields are exposed as env vars (e.g. `$JWT_KEY_B64`, `$USERNAME`, `$CLIENT_ID`, `$INSTANCE_URL`); reference them as `${{ env.FIELD }}` in later steps, not as step outputs.
 
-### `sf-jwt-login` (`.github/actions/sf-jwt-login/action.yml`)
-
-Authenticates to a Salesforce org via JWT bearer flow. Internally calls `get-aws-secret`, decodes a base64 JWT key, runs `sf org login jwt`, and cleans up key files.
-
-**Inputs:** `aws-region`, `secret-name` (default `salesforce/gabor-devhub`), `aws-role-arn`, `org-alias` (default `devhub`), `set-default-dev-hub` (default `true`)
-**Outputs:** `org-id`, `username`
-**Expected AWS secret JSON fields:** `JWT_KEY_B64`, `USERNAME`, `CLIENT_ID`, `INSTANCE_URL`.
-
 ### `sf-org-login` (`.github/actions/sf-org-login/action.yml`)
 
-Authenticates to a Salesforce org from an SFDX auth URL held in a GitHub secret (`sf org login sfdx-url`) — no cloud dependency. Cleans up the auth-URL file in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
+The single login action — **two credential sources, one contract**. `auth-method: auth-url` (default) runs `sf org login sfdx-url` from a GitHub secret, no cloud dependency. `auth-method: jwt` runs `get-aws-secret`, decodes the base64 key, and runs `sf org login jwt`. Both end with the same authenticated `sf` CLI under `org-alias`, so downstream actions never branch on how the job authenticated. Inputs are validated before any credential file is written; every credential file is removed in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
 
-**Inputs:** `sfdx-auth-url` (required — always a secret), `org-alias` (default `target`), `set-default` (default `false`), `set-default-dev-hub` (default `false`)
-**Outputs:** `org-id`, `username`, `instance-url`
+**Inputs (shared):** `auth-method` (`auth-url` | `jwt`, default `auth-url`), `org-alias` (default `target`), `set-default` (default `false`), `set-default-dev-hub` (default `false`)
+**Inputs (`auth-url`):** `sfdx-auth-url` (required for this method — always a secret)
+**Inputs (`jwt`):** `aws-role-arn` (required for this method), `aws-region` (default `eu-central-1`), `secret-name` (default `salesforce/gabor-devhub`)
+**Outputs:** `org-id`, `username`, `instance-url`, `access-token` (masked with `::add-mask::` before it is written — for actions that call the Salesforce APIs directly instead of shelling out to `sf`)
+**Caller permissions:** none for `auth-url`; `id-token: write` + `contents: read` for `jwt`
+**Expected AWS secret JSON fields (`jwt`):** `JWT_KEY_B64`, `USERNAME`, `CLIENT_ID`, `INSTANCE_URL`.
+
+> Replaced the separate `sf-jwt-login` action. Migrate by calling `sf-org-login`
+> with `auth-method: jwt` and stating `org-alias`/`set-default-dev-hub`
+> explicitly — the merged action defaults to `target`/`false`, not the old
+> `devhub`/`true`.
 
 ### `sf-delta-package` (`.github/actions/sf-delta-package/action.yml`)
 

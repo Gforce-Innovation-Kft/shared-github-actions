@@ -58,11 +58,13 @@ matches plus a reference scan of test classes in the source tree.
   assumption; JSON fields are exported as env vars (reference them as
   `${{ env.FIELD }}`, not step outputs). Requires `id-token: write` +
   `contents: read`.
-- **`sf-jwt-login`** — authenticate to a Salesforce org via JWT bearer flow
-  (wraps `get-aws-secret`, decodes the key, cleans up).
-- **`sf-org-login`** — authenticate to a Salesforce org from an SFDX auth URL
-  held in a GitHub secret (no cloud dependency). Outputs `org-id`, `username`,
-  `instance-url`; cleans up the auth file.
+- **`sf-org-login`** — authenticate to a Salesforce org, either from an SFDX auth
+  URL held in a GitHub secret (`auth-method: auth-url`, the default, no cloud
+  dependency) or via the JWT bearer flow with credentials from AWS Secrets
+  Manager (`auth-method: jwt`, needs `id-token: write` + `aws-role-arn`).
+  Outputs `org-id`, `username`, `instance-url`, `access-token` (masked); cleans
+  up every credential file in an `if: always()` step.
+  Replaces the former `sf-jwt-login` — see [CLAUDE.md](CLAUDE.md#sf-org-login--githubactionssf-org-loginactionyml).
 - **`sf-delta-package`** — generate a delta `package.xml` between two git refs
   with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
   `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.

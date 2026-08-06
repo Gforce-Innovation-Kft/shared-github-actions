@@ -1,11 +1,42 @@
-name: "Salesforce Auth URL Login"
-description: "Authenticate to a Salesforce org using an SFDX auth URL stored in a GitHub secret"
+name: "Salesforce Org Login"
+description: "Authenticate to a Salesforce org by SFDX auth URL or by JWT bearer flow (credentials from AWS Secrets Manager)"
 author: "GForce Innovation"
 
+# One login action, two credential sources. Both end in the same place — an
+# authenticated `sf` CLI under `org-alias` — so every downstream action can
+# depend on one contract instead of branching on how the job authenticated.
+#
+# Caller permissions:
+#   auth-method: auth-url  -> none beyond the job default
+#   auth-method: jwt       -> id-token: write (OIDC role assumption), contents: read
+
 inputs:
+  auth-method:
+    description: "How to authenticate: 'auth-url' (SFDX auth URL secret) or 'jwt' (bearer flow via AWS Secrets Manager)"
+    required: false
+    default: "auth-url"
+
+  # --- auth-method: auth-url -------------------------------------------------
   sfdx-auth-url:
-    description: "SFDX auth URL (force://...) — always pass a GitHub secret, never a literal"
-    required: true
+    description: "SFDX auth URL (force://...) — always pass a GitHub secret, never a literal. Required when auth-method is auth-url."
+    required: false
+    default: ""
+
+  # --- auth-method: jwt ------------------------------------------------------
+  aws-region:
+    description: "AWS region holding the credential secret (auth-method: jwt)"
+    required: false
+    default: "eu-central-1"
+  secret-name:
+    description: "AWS Secrets Manager secret with JWT_KEY_B64 / USERNAME / CLIENT_ID / INSTANCE_URL (auth-method: jwt)"
+    required: false
+    default: "salesforce/gabor-devhub"
+  aws-role-arn:
+    description: "IAM role to assume via OIDC. Required when auth-method is jwt."
+    required: false
+    default: ""
+
+  # --- shared ----------------------------------------------------------------
   org-alias:
     description: "Alias for the Salesforce org"
     required: false
@@ -29,11 +60,45 @@ outputs:
   instance-url:
     description: "The org instance URL"
     value: ${{ steps.display-org.outputs.instance-url }}
+  access-token:
+    description: "Session access token, masked in the log. For actions that call the Salesforce APIs directly instead of shelling out to `sf`."
+    value: ${{ steps.display-org.outputs.access-token }}
 
 runs:
   using: "composite"
   steps:
+    # Fail on a bad method before touching AWS or writing any credential file.
+    - name: Validate inputs
+      shell: bash
+      env:
+        AUTH_METHOD: ${{ inputs.auth-method }}
+        SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
+        AWS_ROLE_ARN: ${{ inputs.aws-role-arn }}
+      run: |
+        set -euo pipefail
+
+        case "$AUTH_METHOD" in
+          auth-url)
+            if [ -z "$SFDX_AUTH_URL" ]; then
+              echo "::error::auth-method 'auth-url' needs sfdx-auth-url — pass the secret holding the force:// URL (sf org display --verbose --json | jq -r '.result.sfdxAuthUrl')" >&2
+              exit 1
+            fi
+            ;;
+          jwt)
+            if [ -z "$AWS_ROLE_ARN" ]; then
+              echo "::error::auth-method 'jwt' needs aws-role-arn (the IAM role assumed via OIDC)." >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "::error::auth-method must be 'auth-url' or 'jwt', got '$AUTH_METHOD'." >&2
+            exit 1
+            ;;
+        esac
+
+    # --- auth-method: auth-url ------------------------------------------------
     - name: Salesforce auth URL login
+      if: ${{ inputs.auth-method == 'auth-url' }}
       shell: bash
       env:
         SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
@@ -42,11 +107,6 @@ runs:
         SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
       run: |
         set -euo pipefail
-
-        if [ -z "$SFDX_AUTH_URL" ]; then
-          echo "::error::sfdx-auth-url is empty — pass the secret holding the force:// auth URL (sf org display --verbose --json | jq -r '.result.sfdxAuthUrl')" >&2
-          exit 1
-        fi
 
         umask 077
         printf '%s' "$SFDX_AUTH_URL" > sfdx-auth-url.txt
@@ -63,6 +123,59 @@ runs:
           --alias "$ORG_ALIAS" \
           "${EXTRA_ARGS[@]}"
 
+    # --- auth-method: jwt -----------------------------------------------------
+    # Own-repo ref: composite actions cannot use relative paths, so this resolves
+    # at runtime against the released tag.
+    - name: Get Salesforce credentials from AWS Secrets Manager
+      if: ${{ inputs.auth-method == 'jwt' }}
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/get-aws-secret@v1
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        secret-name: ${{ inputs.secret-name }}
+        aws-role-arn: ${{ inputs.aws-role-arn }}
+
+    - name: Salesforce JWT login
+      if: ${{ inputs.auth-method == 'jwt' }}
+      shell: bash
+      env:
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        SET_DEFAULT: ${{ inputs.set-default }}
+        SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
+        SECRET_NAME: ${{ inputs.secret-name }}
+      run: |
+        set -euo pipefail
+
+        for FIELD in JWT_KEY_B64 USERNAME CLIENT_ID INSTANCE_URL; do
+          if [ -z "${!FIELD:-}" ]; then
+            echo "::error::Secret '$SECRET_NAME' exposed no $FIELD field. Expected fields: JWT_KEY_B64, USERNAME, CLIENT_ID, INSTANCE_URL." >&2
+            exit 1
+          fi
+        done
+
+        umask 077
+        if command -v openssl >/dev/null 2>&1; then
+          printf '%s' "$JWT_KEY_B64" | openssl base64 -d -A > jwt-key.txt
+        else
+          printf '%s' "$JWT_KEY_B64" | base64 --decode > jwt-key.txt
+        fi
+        chmod 600 jwt-key.txt
+
+        EXTRA_ARGS=()
+        if [ "$SET_DEFAULT" = "true" ]; then
+          EXTRA_ARGS+=(--set-default)
+        fi
+        if [ "$SET_DEFAULT_DEV_HUB" = "true" ]; then
+          EXTRA_ARGS+=(--set-default-dev-hub)
+        fi
+        sf org login jwt \
+          --username "$USERNAME" \
+          --jwt-key-file jwt-key.txt \
+          --client-id "$CLIENT_ID" \
+          --instance-url "$INSTANCE_URL" \
+          --alias "$ORG_ALIAS" \
+          "${EXTRA_ARGS[@]}"
+
+    # --- shared ---------------------------------------------------------------
     - name: Display org info
       id: display-org
       shell: bash
@@ -70,16 +183,30 @@ runs:
         ORG_ALIAS: ${{ inputs.org-alias }}
       run: |
         set -euo pipefail
+        umask 077
         sf org display --target-org "$ORG_ALIAS" --json > org-info.json
 
         # node instead of jq: node ships wherever the sf CLI runs (containers included)
-        ORG_ID=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.id")
-        USERNAME=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.username")
-        INSTANCE_URL=$(node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.instanceUrl")
+        read_field() {
+          node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.$1 ?? ''"
+        }
 
-        echo "org-id=$ORG_ID" >> "$GITHUB_OUTPUT"
-        echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
-        echo "instance-url=$INSTANCE_URL" >> "$GITHUB_OUTPUT"
+        ORG_ID=$(read_field id)
+        USERNAME=$(read_field username)
+        INSTANCE_URL=$(read_field instanceUrl)
+        ACCESS_TOKEN=$(read_field accessToken)
+
+        # Mask before the value can reach any later log line or output.
+        if [ -n "$ACCESS_TOKEN" ]; then
+          echo "::add-mask::$ACCESS_TOKEN"
+        fi
+
+        {
+          echo "org-id=$ORG_ID"
+          echo "username=$USERNAME"
+          echo "instance-url=$INSTANCE_URL"
+          echo "access-token=$ACCESS_TOKEN"
+        } >> "$GITHUB_OUTPUT"
 
         echo "✅ Successfully authenticated to Salesforce"
         echo "   Org ID: $ORG_ID"
@@ -90,4 +217,4 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f sfdx-auth-url.txt org-info.json
+        rm -f sfdx-auth-url.txt jwt-key.txt org-info.json
