@@ -1,0 +1,438 @@
+# Salesforce ops dispatch (L3) — the single external entry point
+#
+# Salesforce (LWC -> Apex -> GitHub App JWT -> dispatch API) asks for one
+# operation. This workflow decides which one, runs exactly one route, and
+# reports the terminal status back so the LWC can render it.
+#
+#   normalize ─┬─ create-version ────────────► sf-package-release.yml (L2)
+#              ├─ create-version-dry-run
+#              ├─ promote ──────────────────► sf-package-promote (L1)
+#              ├─ install ──────────────────► sf-package-install  (L1)
+#              └─ report (needs: all, always) ► sf-ops-callback    (L1)
+#
+# Three properties this file exists to guarantee:
+#
+#   * No silent no-op. GitHub reports a skipped job as green, so an operation
+#     that matched no route would look like success. `report` needs every route
+#     and fails the run when none of them ran.
+#   * One route per request. Routing cannot be dynamic — `uses:` takes no
+#     expressions — so each operation is its own job guarded by `if:`. Adding an
+#     operation is one allow-list entry in `normalize` plus one job.
+#   * Traceability. Every request carries a correlation id; it keys the callback
+#     and names the jobs. `run-name:` cannot be set here (a called workflow's
+#     run-name is ignored — the caller's applies), so the L4 caller sets it. See
+#     docs/consuming-sf-dispatch.md.
+
+name: Salesforce Ops Dispatch (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        description: "create-version | promote | install. Ignored on repository_dispatch — the client payload wins."
+        required: false
+        default: ""
+        type: string
+      correlation-id:
+        description: "Requester-generated id for this operation. Keys the callback; 8-64 chars of [A-Za-z0-9_-]."
+        required: false
+        default: ""
+        type: string
+      package:
+        description: "Package name or alias from sfdx-project.json (create-version)"
+        required: false
+        default: ""
+        type: string
+      version-id:
+        description: "SubscriberPackageVersionId 04t... (promote, install)"
+        required: false
+        default: ""
+        type: string
+      target-org-alias:
+        description: "Alias to authenticate the target org under (install)"
+        required: false
+        default: "target"
+        type: string
+      environment:
+        description: "GitHub environment gating the destructive routes. Promote is irreversible; installing into production is not a dev action."
+        required: false
+        default: "sf-ops"
+        type: string
+      source-dirs:
+        description: "Space-separated package directories to deploy during validation (create-version)"
+        required: false
+        default: ""
+        type: string
+      run-validate:
+        description: "Run the scratch-org validation job before building a version (create-version)"
+        required: false
+        default: true
+        type: boolean
+      skip-validation:
+        description: "Build with --skip-validation, drawing on the 500/day limit instead of the 6/day one (create-version)"
+        required: false
+        default: false
+        type: boolean
+      allow-unvalidated:
+        description: "Promote a version built with --skip-validation (promote)"
+        required: false
+        default: false
+        type: boolean
+      container-image:
+        description: "Docker image the Salesforce jobs run in"
+        required: false
+        default: "gforceinnovation/sf-ci:latest"
+        type: string
+      dry-run:
+        description: "Route and report without touching Salesforce. Proves the contract with no scratch org, no quota and no secrets."
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      dev-hub-auth-url:
+        description: "SFDX auth URL of the Dev Hub (create-version, promote)"
+        required: false
+      target-org-auth-url:
+        description: "SFDX auth URL of the org to install into (install)"
+        required: false
+      callback-auth-url:
+        description: "SFDX auth URL of the org hosting the callback endpoint"
+        required: false
+      installation-key:
+        description: "Installation key, when the version was built with one (install)"
+        required: false
+
+# Least privilege by default; every job opts in to what it needs.
+permissions: {}
+
+# One in-flight run per correlation id, so a duplicate delivery queues behind
+# the original instead of racing it. `cancel-in-progress: false` on purpose:
+# cancelling a package build orphans a scratch org and abandons a quota slot
+# that has already been spent.
+#
+# This only covers concurrent retries. A retry after the first run finished is
+# handled per-operation — promote and install detect the already-done state and
+# report success rather than doing it twice.
+concurrency:
+  group: sf-ops-${{ inputs.correlation-id || github.event.client_payload.correlationId || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # normalize — the only place that reads untrusted input.
+  #
+  # Tier 2 (github-script): pure GitHub-side glue, no Salesforce CLI, no bundle.
+  # Values reach the script through `env:` only — a `${{ }}` inside a script body
+  # is string-substituted before Node parses it, which is script injection.
+  #
+  # A rejected request does NOT fail this job. It sets valid=false and passes the
+  # reason on, so `report` can still call Salesforce back with the correlation id
+  # before failing the run. Failing here instead would leave the requester
+  # waiting on a run it can never learn the fate of.
+  # ---------------------------------------------------------------------------
+  normalize:
+    name: Normalize request
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      valid: ${{ steps.parse.outputs.valid }}
+      error-code: ${{ steps.parse.outputs.error-code }}
+      error-message: ${{ steps.parse.outputs.error-message }}
+      operation: ${{ steps.parse.outputs.operation }}
+      correlation-id: ${{ steps.parse.outputs.correlation-id }}
+      package: ${{ steps.parse.outputs.package }}
+      version-id: ${{ steps.parse.outputs.version-id }}
+      target-org-alias: ${{ steps.parse.outputs.target-org-alias }}
+      environment: ${{ steps.parse.outputs.environment }}
+      dry-run: ${{ steps.parse.outputs.dry-run }}
+    steps:
+      - name: Parse and validate the request
+        id: parse
+        uses: actions/github-script@v9
+        env:
+          # repository_dispatch delivers client_payload; workflow_dispatch and a
+          # direct workflow_call deliver these inputs. Both feed one parser.
+          IN_OPERATION: ${{ inputs.operation }}
+          IN_CORRELATION_ID: ${{ inputs.correlation-id }}
+          IN_PACKAGE: ${{ inputs.package }}
+          IN_VERSION_ID: ${{ inputs.version-id }}
+          IN_TARGET_ORG_ALIAS: ${{ inputs.target-org-alias }}
+          IN_ENVIRONMENT: ${{ inputs.environment }}
+          IN_DRY_RUN: ${{ inputs.dry-run }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const payload = context.payload.client_payload ?? {};
+            const env = process.env;
+            const pick = (key, name) => String(payload[key] ?? env[name] ?? '').trim();
+            const FIELDS = [
+              ['operation', pick('operation', 'IN_OPERATION'), /^(create-version|promote|install)$/, true],
+              ['correlation-id', pick('correlationId', 'IN_CORRELATION_ID'), /^[A-Za-z0-9_-]{8,64}$/, true],
+              ['package', pick('package', 'IN_PACKAGE'), /^[A-Za-z0-9 ._-]{1,80}$/, false],
+              ['version-id', pick('versionId', 'IN_VERSION_ID'), /^04t[A-Za-z0-9]{12,15}$/, false],
+              ['target-org-alias', pick('targetOrgAlias', 'IN_TARGET_ORG_ALIAS'), /^[A-Za-z0-9._-]{1,80}$/, false],
+              ['environment', pick('environment', 'IN_ENVIRONMENT'), /^[A-Za-z0-9._ -]{1,60}$/, false],
+            ];
+            const values = {};
+            let rejection = null;
+            for (const [name, value, pattern, required] of FIELDS) {
+              const accepted = value !== '' && pattern.test(value);
+              values[name] = accepted ? value : '';
+              core.setOutput(name, values[name]);
+              if (!accepted && required) {
+                rejection ??= value === '' ? `${name} is required.` : `${name} is not an accepted value.`;
+              }
+            }
+            if (!rejection && ['promote', 'install'].includes(values['operation']) && !values['version-id']) {
+              rejection = `${values['operation']} requires version-id (04t...).`;
+            }
+            core.setOutput('dry-run', String(payload.dryRun ?? env.IN_DRY_RUN) === 'true');
+            core.setOutput('valid', !rejection);
+            core.setOutput('error-code', rejection ? 'INVALID_INPUT' : '');
+            core.setOutput('error-message', rejection ?? '');
+            if (rejection) core.warning(`Request rejected: ${rejection}`);
+            else core.notice(`Routing '${values['operation']}' for correlation id '${values['correlation-id']}'.`);
+
+  # ---------------------------------------------------------------------------
+  # Route: create-version -> L2 sf-package-release.yml
+  #
+  # Two jobs, not one. A `uses:` job cannot conditionally skip its own steps, so
+  # dry-run gets a twin that reports the route without spending a quota slot.
+  # ---------------------------------------------------------------------------
+  create-version:
+    name: Create package version
+    needs: normalize
+    if: ${{ needs.normalize.outputs.valid == 'true' && needs.normalize.outputs.operation == 'create-version' && needs.normalize.outputs.dry-run != 'true' }}
+    permissions:
+      contents: write
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/sf-package-release.yml@v1
+    with:
+      package: ${{ needs.normalize.outputs.package }}
+      source-dirs: ${{ inputs.source-dirs }}
+      run-validate: ${{ inputs.run-validate }}
+      skip-validation: ${{ inputs.skip-validation }}
+      container-image: ${{ inputs.container-image }}
+    secrets:
+      sfdx-auth-url: ${{ secrets.dev-hub-auth-url }}
+
+  create-version-dry-run:
+    name: Create package version (dry run)
+    needs: normalize
+    if: ${{ needs.normalize.outputs.valid == 'true' && needs.normalize.outputs.operation == 'create-version' && needs.normalize.outputs.dry-run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report the route without building
+        shell: bash
+        env:
+          PACKAGE: ${{ needs.normalize.outputs.package }}
+          CORRELATION_ID: ${{ needs.normalize.outputs.correlation-id }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Dry run — would call sf-package-release.yml for package '${PACKAGE:-<default>}' (correlation id $CORRELATION_ID)."
+
+  # ---------------------------------------------------------------------------
+  # Route: promote -> L1 sf-package-promote
+  #
+  # Behind an environment gate: promotion cannot be undone and a released
+  # version is installable by subscribers forever.
+  # ---------------------------------------------------------------------------
+  promote:
+    name: Promote package version
+    needs: normalize
+    if: ${{ needs.normalize.outputs.valid == 'true' && needs.normalize.outputs.operation == 'promote' }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.normalize.outputs.environment }}
+    permissions:
+      contents: read
+    container:
+      image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users hit EACCES without this.
+      options: --user root
+    outputs:
+      status: ${{ steps.promote.outputs.status }}
+      version-number: ${{ steps.promote.outputs.version-number }}
+      version-id: ${{ needs.normalize.outputs.version-id }}
+    steps:
+      - name: Salesforce Dev Hub login
+        if: ${{ needs.normalize.outputs.dry-run != 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v1
+        with:
+          sfdx-auth-url: ${{ secrets.dev-hub-auth-url }}
+          org-alias: devhub
+          set-default-dev-hub: "true"
+
+      - name: Promote version
+        id: promote
+        if: ${{ needs.normalize.outputs.dry-run != 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-promote@v1
+        with:
+          version-id: ${{ needs.normalize.outputs.version-id }}
+          dev-hub-alias: devhub
+          allow-unvalidated: ${{ inputs.allow-unvalidated }}
+
+      - name: Report the route without promoting
+        if: ${{ needs.normalize.outputs.dry-run == 'true' }}
+        shell: bash
+        env:
+          VERSION_ID: ${{ needs.normalize.outputs.version-id }}
+        run: echo "::notice::Dry run — would promote $VERSION_ID."
+
+  # ---------------------------------------------------------------------------
+  # Route: install -> L1 sf-package-install
+  #
+  # Installs the one version it was given. Resolving "latest released version of
+  # package X" into an ordered dependency chain is sf-package-resolve, which
+  # lands next and will feed this job a matrix — 2GP dependencies are not
+  # transitive, so the chain must be installed in order.
+  # ---------------------------------------------------------------------------
+  install:
+    name: Install package version
+    needs: normalize
+    if: ${{ needs.normalize.outputs.valid == 'true' && needs.normalize.outputs.operation == 'install' }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.normalize.outputs.environment }}
+    permissions:
+      contents: read
+    container:
+      image: ${{ inputs.container-image }}
+      options: --user root
+    outputs:
+      status: ${{ steps.install.outputs.status }}
+      install-request-id: ${{ steps.install.outputs.install-request-id }}
+      version-id: ${{ needs.normalize.outputs.version-id }}
+    steps:
+      - name: Target org login
+        if: ${{ needs.normalize.outputs.dry-run != 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v1
+        with:
+          sfdx-auth-url: ${{ secrets.target-org-auth-url }}
+          org-alias: ${{ needs.normalize.outputs.target-org-alias }}
+
+      - name: Install version
+        id: install
+        if: ${{ needs.normalize.outputs.dry-run != 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-package-install@v1
+        with:
+          version-id: ${{ needs.normalize.outputs.version-id }}
+          target-org-alias: ${{ needs.normalize.outputs.target-org-alias }}
+          installation-key: ${{ secrets.installation-key }}
+
+      - name: Report the route without installing
+        if: ${{ needs.normalize.outputs.dry-run == 'true' }}
+        shell: bash
+        env:
+          VERSION_ID: ${{ needs.normalize.outputs.version-id }}
+          TARGET_ORG_ALIAS: ${{ needs.normalize.outputs.target-org-alias }}
+        run: echo "::notice::Dry run — would install $VERSION_ID into '$TARGET_ORG_ALIAS'."
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-evidence-${{ github.run_number }}
+          path: evidence/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # report — the fail-closed end of the chain.
+  #
+  # `needs` every route so it can see which one ran. It reports the terminal
+  # status to Salesforce and then exits non-zero unless the run actually
+  # succeeded — including when nothing routed at all, which is what stops a
+  # skipped-everything run from showing green.
+  # ---------------------------------------------------------------------------
+  report:
+    name: Report result
+    needs: [normalize, create-version, create-version-dry-run, promote, install]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: ${{ inputs.container-image }}
+      options: --user root
+    steps:
+      - name: Aggregate route results
+        id: aggregate
+        uses: actions/github-script@v9
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          ROUTE_JOBS: create-version,create-version-dry-run,promote,install
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const needs = JSON.parse(process.env.NEEDS_JSON);
+            const routes = process.env.ROUTE_JOBS.split(',');
+            const normalize = needs.normalize;
+            const report = (status, errorCode, errorMessage, outputs = {}) => {
+              core.setOutput('status', status);
+              core.setOutput('error-code', errorCode);
+              core.setOutput('error-message', errorMessage);
+              core.setOutput('outputs-json', JSON.stringify(outputs));
+            };
+
+            // normalize rejected the request, or itself broke.
+            if (normalize.result !== 'success') {
+              return report('failed', 'INTERNAL', 'The dispatcher could not process the request. See the normalize job.');
+            }
+            if (normalize.outputs.valid !== 'true') {
+              return report('failed', normalize.outputs['error-code'] || 'INVALID_INPUT', normalize.outputs['error-message'] || 'The request was rejected.');
+            }
+
+            const results = routes.map((job) => needs[job]?.result ?? 'skipped');
+            const outputs = Object.fromEntries(
+              routes.flatMap((job) => Object.entries(needs[job]?.outputs ?? {})).filter(([, value]) => value !== ''),
+            );
+
+            if (results.includes('failure')) return report('failed', 'ROUTE_FAILED', 'The routed operation failed. See the run for the step that failed.', outputs);
+            if (results.includes('cancelled')) return report('cancelled', 'CANCELLED', 'The run was cancelled before the operation finished.', outputs);
+            if (results.includes('success')) return report('succeeded', '', '', outputs);
+            // Every route skipped. GitHub reports that as green; we must not.
+            return report('no-route', 'INVALID_OPERATION', `No route matched operation '${normalize.outputs.operation}', so nothing ran.`);
+
+      # No correlation id means the callback has no key to record against — the
+      # one case where the requester cannot be told, and it can only happen when
+      # the id itself failed validation.
+      - name: Warn that the request is unattributable
+        if: ${{ needs.normalize.outputs.correlation-id == '' }}
+        shell: bash
+        run: echo "::warning::No valid correlation id in the request — no callback can be delivered. The run still fails."
+
+      - name: Callback org login
+        if: ${{ needs.normalize.outputs.correlation-id != '' && needs.normalize.outputs.dry-run != 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v1
+        with:
+          sfdx-auth-url: ${{ secrets.callback-auth-url }}
+          org-alias: callback
+
+      - name: Report to Salesforce
+        if: ${{ needs.normalize.outputs.correlation-id != '' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-ops-callback@v1
+        with:
+          correlation-id: ${{ needs.normalize.outputs.correlation-id }}
+          operation: ${{ needs.normalize.outputs.operation || 'unknown' }}
+          status: ${{ steps.aggregate.outputs.status }}
+          outputs-json: ${{ steps.aggregate.outputs.outputs-json }}
+          error-code: ${{ steps.aggregate.outputs.error-code }}
+          error-message: ${{ steps.aggregate.outputs.error-message }}
+          org-alias: callback
+          dry-run: ${{ needs.normalize.outputs.dry-run }}
+
+      # Last line of defence: a skipped job is green, so without this a request
+      # that matched no route would report success to the requester.
+      - name: Fail unless the operation succeeded
+        shell: bash
+        env:
+          STATUS: ${{ steps.aggregate.outputs.status }}
+          ERROR_CODE: ${{ steps.aggregate.outputs.error-code }}
+          ERROR_MESSAGE: ${{ steps.aggregate.outputs.error-message }}
+        run: |
+          set -euo pipefail
+          if [ "$STATUS" = "succeeded" ]; then
+            echo "::notice::Operation succeeded."
+            exit 0
+          fi
+          echo "::error title=$ERROR_CODE::$ERROR_MESSAGE" >&2
+          exit 1

@@ -1,0 +1,166 @@
+name: "Salesforce Package Promote"
+description: "Promote a 2GP package version to released, refusing to promote a version Salesforce never validated"
+
+# Promotion is irreversible: a released version can never be un-released or
+# deleted, and subscribers can install it forever. So this action does two
+# things beyond calling the CLI:
+#
+#   1. Refuses a version built with --skip-validation unless the caller says
+#      allow-unvalidated. That is the only guard the platform does NOT apply.
+#   2. Treats an already-released version as success, not failure, so a retried
+#      request (same correlation id, second delivery) is a no-op.
+#
+# `sf package version promote` is synchronous — there is no request object to
+# poll — which is why this stays a composite action.
+#
+# Caller permissions: contents: read
+
+inputs:
+  version-id:
+    description: "SubscriberPackageVersionId (04t...) to promote"
+    required: true
+  dev-hub-alias:
+    description: "Alias of the authenticated Dev Hub that owns the package"
+    required: false
+    default: "devhub"
+  allow-unvalidated:
+    description: "Promote even when the version was built with --skip-validation. Off by default — an unvalidated version was never compiled against a real org."
+    required: false
+    default: "false"
+
+outputs:
+  status:
+    description: "promoted | already-released"
+    value: ${{ steps.promote.outputs.status }}
+  promoted:
+    description: "true when this run performed the promotion, false when it was already released"
+    value: ${{ steps.promote.outputs.promoted }}
+  version-number:
+    description: "Version number, Major.Minor.Patch.Build"
+    value: ${{ steps.guard.outputs.version-number }}
+  package-id:
+    description: "Package2Id (0Ho...) owning the version"
+    value: ${{ steps.guard.outputs.package-id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check the version before promoting it
+      id: guard
+      shell: bash
+      env:
+        VERSION_ID: ${{ inputs.version-id }}
+        DEV_HUB_ALIAS: ${{ inputs.dev-hub-alias }}
+        ALLOW_UNVALIDATED: ${{ inputs.allow-unvalidated }}
+      run: |
+        set -euo pipefail
+
+        case "$VERSION_ID" in
+          04t*) ;;
+          *)
+            echo "::error::version-id must be a SubscriberPackageVersionId starting with 04t, got '$VERSION_ID'." >&2
+            exit 1
+            ;;
+        esac
+
+        QUERY="SELECT Id, IsReleased, ValidationSkipped, Package2Id, MajorVersion, MinorVersion, PatchVersion, BuildNumber FROM Package2Version WHERE SubscriberPackageVersionId = '$VERSION_ID'"
+
+        set +e
+        sf data query --use-tooling-api --json \
+          --target-org "$DEV_HUB_ALIAS" \
+          --query "$QUERY" > version.json 2> version.log
+        QUERY_EXIT=$?
+        set -e
+        cat version.log >&2 || true
+
+        if [ ! -s version.json ]; then
+          echo "::error::The Salesforce CLI produced no JSON for the version lookup (exit $QUERY_EXIT). See the log above." >&2
+          exit 1
+        fi
+
+        read_field() {
+          node -pe "JSON.parse(require('fs').readFileSync('version.json','utf8')).result.records?.[0]?.$1 ?? ''"
+        }
+
+        RECORD_ID=$(read_field Id)
+        if [ -z "$RECORD_ID" ]; then
+          echo "::error::Dev Hub '$DEV_HUB_ALIAS' owns no Package2Version for $VERSION_ID. Promote from the Dev Hub that built it." >&2
+          exit 1
+        fi
+
+        IS_RELEASED=$(read_field IsReleased)
+        VALIDATION_SKIPPED=$(read_field ValidationSkipped)
+        PACKAGE_ID=$(read_field Package2Id)
+        VERSION_NUMBER="$(read_field MajorVersion).$(read_field MinorVersion).$(read_field PatchVersion).$(read_field BuildNumber)"
+
+        {
+          echo "is-released=$IS_RELEASED"
+          echo "validation-skipped=$VALIDATION_SKIPPED"
+          echo "package-id=$PACKAGE_ID"
+          echo "version-number=$VERSION_NUMBER"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$VALIDATION_SKIPPED" = "true" ] && [ "$ALLOW_UNVALIDATED" != "true" ]; then
+          echo "::error title=NOT_VALIDATED::$VERSION_ID ($VERSION_NUMBER) was built with --skip-validation, so Salesforce never compiled it against an org. Rebuild it validated, or re-run with allow-unvalidated: true if you accept the risk." >&2
+          exit 1
+        fi
+
+        if [ "$VALIDATION_SKIPPED" = "true" ]; then
+          echo "::warning::Promoting an unvalidated version ($VERSION_NUMBER) because allow-unvalidated is true."
+        fi
+
+    - name: Promote the version
+      id: promote
+      shell: bash
+      env:
+        VERSION_ID: ${{ inputs.version-id }}
+        DEV_HUB_ALIAS: ${{ inputs.dev-hub-alias }}
+        IS_RELEASED: ${{ steps.guard.outputs.is-released }}
+        VERSION_NUMBER: ${{ steps.guard.outputs.version-number }}
+      run: |
+        set -euo pipefail
+
+        # Idempotent: a second delivery of the same request must not fail.
+        if [ "$IS_RELEASED" = "true" ]; then
+          echo "::notice::$VERSION_ID ($VERSION_NUMBER) is already released — nothing to do."
+          {
+            echo "status=already-released"
+            echo "promoted=false"
+          } >> "$GITHUB_OUTPUT"
+        else
+          set +e
+          sf package version promote \
+            --package "$VERSION_ID" \
+            --target-dev-hub "$DEV_HUB_ALIAS" \
+            --no-prompt --json > promote.json 2> promote.log
+          PROMOTE_EXIT=$?
+          set -e
+          cat promote.log >&2 || true
+
+          if [ "$PROMOTE_EXIT" -ne 0 ]; then
+            MESSAGE=$(node -pe "try { JSON.parse(require('fs').readFileSync('promote.json','utf8')).message ?? '' } catch { '' }")
+            echo "::error::Promoting $VERSION_ID failed (exit $PROMOTE_EXIT). ${MESSAGE:-See the log above.}" >&2
+            exit 1
+          fi
+
+          echo "::notice::Promoted $VERSION_ID ($VERSION_NUMBER) to released."
+          {
+            echo "status=promoted"
+            echo "promoted=true"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+        {
+          echo "## Package promote"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Version Id | \`$VERSION_ID\` |"
+          echo "| Version | $VERSION_NUMBER |"
+          echo "| Result | $([ "$IS_RELEASED" = "true" ] && echo 'already released' || echo 'promoted') |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f version.json version.log promote.json promote.log
