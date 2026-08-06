@@ -2,15 +2,25 @@
 
 This directory contains example workflows showing how to use the shared GitHub Actions in different scenarios.
 
+> **⚠️ These pin `@v2`, which is not cut yet.**
+> The action and workflow names here follow the convention in
+> [ADR 0002](../docs/adr/0002-naming-and-repo-structure.md); those paths exist on
+> `develop` and `main` but at no tag. `v1` is frozen at the *pre-rename* layout.
+>
+> Until `v2` is tagged, either pin `@main` (accepting that it moves) or use `@v1`
+> with the old names: `get-aws-secret`, `create-release-pr`, `sync-branches`,
+> `sf-delta-package`, `sf-find-tests`, `sf-scratch-org`, and workflows without the
+> `reusable-` prefix. Once `v2` exists these examples are correct as written.
+
 ## Salesforce CI/CD Pair
 
-### `sf-pr-validate.yml`
+### `reusable-sf-pr-validate.yml`
 
 PR code health (Jest + scratch org): runs `npm test` when present, plus a
 scratch-org create/push/test/delete cycle against `config/scratch-orgs/ci.json`.
 One repository secret (`DEVHUB_AUTH_URL`) is the only setup.
 
-### `sf-release.yml`
+### `reusable-sf-release.yml`
 
 Release: delta validation on PRs, gated quick deploy on merge. On PRs it
 check-only deploys the delta against the target org and records the deploy

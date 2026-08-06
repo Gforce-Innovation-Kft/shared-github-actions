@@ -14,6 +14,6 @@ permissions:
 
 jobs:
   validate:
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-pr-validate.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-pr-validate.yml@v2
     secrets:
       sfdx-auth-url: ${{ secrets.DEVHUB_AUTH_URL }}

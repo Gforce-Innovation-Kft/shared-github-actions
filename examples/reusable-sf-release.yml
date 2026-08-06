@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   release:
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-release.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-release.yml@v2
     with:
       environment: devhub
       full-deploy: ${{ github.event_name == 'workflow_dispatch' && inputs.full-deploy }}
