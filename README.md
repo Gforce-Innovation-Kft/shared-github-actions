@@ -13,6 +13,11 @@ Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows
 See [Versioning](#versioning) for how to pin (`@v1`, `@v1.2.0`, or a full
 commit SHA — avoid `@main` in production callers).
 
+**New here?** [`docs/pipeline-map.md`](docs/pipeline-map.md) is the whole system
+on one page: flow diagrams of the four layers, the Salesforce dispatch chain, and
+what is still missing. The same content as sortable tables:
+[`docs/sf-cicd-pipeline-map.xlsx`](docs/sf-cicd-pipeline-map.xlsx).
+
 ## TypeScript Actions
 
 Thin Node20 entry points over a strict, class-based singleton architecture in

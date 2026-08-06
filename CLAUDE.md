@@ -16,6 +16,11 @@ From other repos, reference items using:
 
 ## Pipeline Layers (L1–L4)
 
+> **Start here for the whole system:** [`docs/pipeline-map.md`](docs/pipeline-map.md)
+> — flow diagrams of every layer, the dispatch chain, and what is still missing.
+> Its tables are also in [`docs/sf-cicd-pipeline-map.xlsx`](docs/sf-cicd-pipeline-map.xlsx).
+> The diagrams are mermaid, so editing them is how to specify a change.
+
 Do not confuse this with the *code* layering inside a TypeScript action — that is
 a separate thing, documented in `docs/architecture.md`.
 
