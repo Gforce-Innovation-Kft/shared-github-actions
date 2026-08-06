@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "org": "Gforce-Innovation-Kft",
+  "generatedAt": "2026-08-06T15:09:52Z",
+  "assets": [
+    {
+      "kind": "actions",
+      "name": "get-aws-secret",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/actions/sf-jwt-login/action.yml",
+              "ref": "main"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-delta-package",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/sf-release.yml",
+              "ref": "v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-find-tests",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/sf-release.yml",
+              "ref": "v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-jwt-login",
+      "consumers": [
+        {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/test-aws-secrets.yml",
+              "ref": "main"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-org-login",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/sf-pr-validate.yml",
+              "ref": "v1"
+            },
+            {
+              "file": ".github/workflows/sf-release.yml",
+              "ref": "v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "workflows",
+      "name": "sf-pr-validate.yml",
+      "consumers": [
+        {
+          "repo": "sfdx_template_enterprise",
+          "references": [
+            {
+              "file": ".github/workflows/pr-validate.yml",
+              "ref": "v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "workflows",
+      "name": "sf-release.yml",
+      "consumers": [
+        {
+          "repo": "sfdx_template_enterprise",
+          "references": [
+            {
+              "file": ".github/workflows/release.yml",
+              "ref": "v1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

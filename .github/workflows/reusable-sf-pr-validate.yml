@@ -12,6 +12,20 @@ on:
         required: false
         default: 'gforceinnovation/sf-ci:latest'
         type: string
+      container-user:
+        description: >-
+          User the container job runs as. Pass "1001" — the GitHub-hosted
+          runner's UID — to run unprivileged: the runner owns /github/home and
+          the file-command dir, so the job must be that UID to write them.
+
+          The default is still "root" ONLY because the published
+          gforceinnovation/sf-ci:latest predates the change that registers UID
+          1001 in /etc/passwd, and `sf` crashes on a UID it cannot resolve.
+          Once sf-docker-images v3.0.0 is released, flip this default to "1001"
+          — that is the whole point of the input.
+        required: false
+        default: "root"
+        type: string
       checkout-submodules:
         description: 'Passed to actions/checkout submodules (false, true, recursive)'
         required: false
@@ -33,9 +47,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
-      # Runner file-command dirs are owned by the host runner user; non-root
-      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
-      options: --user root
+      # Run as the runner's own UID, not root: the runner owns
+      # /github/home and the file-command dir. See the container-user input.
+      options: --user ${{ inputs.container-user }}
     permissions:
       contents: read
     steps:
@@ -69,9 +83,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.container-image }}
-      # Runner file-command dirs are owned by the host runner user; non-root
-      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
-      options: --user root
+      # Run as the runner's own UID, not root: the runner owns
+      # /github/home and the file-command dir. See the container-user input.
+      options: --user ${{ inputs.container-user }}
     permissions:
       contents: read
     steps:
