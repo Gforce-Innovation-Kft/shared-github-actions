@@ -1,5 +1,73 @@
 # Architecture
 
+Two independent layerings, easy to confuse:
+
+1. **The pipeline layering (L1–L4)** — how actions, workflows and consumers
+   compose. Described below.
+2. **The code layering inside a TypeScript action** — orchestrator, validator,
+   service, client, selector. Described under
+   [TypeScript actions](#typescript-actions).
+
+## Pipeline layers L1–L4
+
+| Layer | Lives in | Contract |
+|---|---|---|
+| **L1** capability actions | `.github/actions/<name>/` | **One** Salesforce/CLI operation each. No branching between operations, no knowledge of *why* they were invoked. Idempotent wherever the underlying `sf` command allows. |
+| **L2** reusable workflows | `.github/workflows/sf-*.yml` (`workflow_call`) | Compose L1 into a pipeline with business meaning. Typed inputs/outputs, `secrets:` declared explicitly. Never triggered directly by a human or by Salesforce. |
+| **L3** dispatch | `.github/workflows/sf-ops-dispatch.yml` | The single external entry point. Validates a request from Salesforce, routes it to exactly one L2/L1 path, reports the terminal status back. |
+| **L4** consumers | the app repo (`sf-develop-demo`) | Thin `uses:` callers on push/PR/tag/dispatch. Out of this repo except for the contract they must honour. |
+
+Rules that keep the layers apart:
+
+- **L1 never calls L1.** A capability action that only picks between two other
+  actions is a routing decision wearing an action's clothes; it belongs in L2 or
+  L3.
+- **L3 inlines no Salesforce logic.** If the dispatcher needs to know something
+  about a package, that is an L1 action.
+- **No pass-through layer.** A workflow that forwards its inputs unchanged is not
+  a layer.
+- **Nesting is capped at 4.** L4 → L3 → L2 → (action) already spends three.
+- Composite actions have **no `secrets` context** — secrets must arrive as
+  inputs.
+
+### The Salesforce ops chain
+
+```text
+L4  sf-develop-demo/.github/workflows/sf-ops.yml
+      on: repository_dispatch [sf_ops_requested] + workflow_dispatch
+      run-name: carries the correlation id (a called workflow's run-name is ignored)
+        │  uses:
+        ▼
+L3  sf-ops-dispatch.yml   (workflow_call)
+      concurrency: sf-ops-<correlation-id>, cancel-in-progress: false
+      │
+      ├─ normalize              Tier 2 github-script — the only reader of untrusted input
+      ├─ create-version   ────► L2 sf-package-release.yml ─► L1 sf-org-login, sf-scratch-org,
+      │                                                        sf-package-create
+      ├─ create-version-dry-run
+      ├─ promote          ────► L1 sf-org-login → sf-package-promote      [environment gate]
+      ├─ install          ────► L1 sf-org-login → sf-package-install      [environment gate]
+      └─ report (needs: all, if: always())
+                          ────► L1 sf-org-login → sf-ops-callback → Apex REST
+                                then exits non-zero unless the status is `succeeded`
+```
+
+Why it is shaped this way — entry points, routing, the round trip, idempotency
+and authorization — is recorded in
+[ADR 0001](adr/0001-salesforce-dispatch-layer.md). The request/response contract
+the Salesforce side codes against is
+[consuming-sf-dispatch.md](consuming-sf-dispatch.md).
+
+Two properties are worth restating because they are what the design is for:
+
+- **A skipped job is green.** An operation matching no route would therefore
+  report success. `report` needs every route and fails the run when none of them
+  ran.
+- **Both dispatch APIs return 204 with no body.** The requester never learns a
+  run id, so the run reports back rather than being polled.
+
+## TypeScript actions
+
 The TypeScript actions follow a strict, class-based, singleton, MVC-style
 architecture. All implementation lives in **`gforce-gha-src/`** (the single
 source of truth); the only `.ts` file outside it is each action's entry point.
@@ -34,7 +102,10 @@ gforce-gha-src/
   __tests__/                   # mirrors the source tree + __tests__/integration/
 ```
 
-## Layer rules
+### Code layer rules (inside one TypeScript action)
+
+Not to be confused with L1–L4 above: these govern the classes within a single
+action.
 
 | Layer | Allowed | Not allowed |
 | --- | --- | --- |

@@ -14,6 +14,24 @@ From other repos, reference items using:
 - Composite / TypeScript actions: `Gforce-Innovation-Kft/shared-github-actions/.github/actions/<action-name>@v1`
 - Reusable workflows: `Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<workflow-name>.yml@v1`
 
+## Pipeline Layers (L1–L4)
+
+Do not confuse this with the *code* layering inside a TypeScript action — that is
+a separate thing, documented in `docs/architecture.md`.
+
+| Layer | Lives in | Contract |
+|---|---|---|
+| **L1** | `.github/actions/<name>/` | **One** Salesforce/CLI operation each. No branching between operations, no knowledge of why it was invoked. |
+| **L2** | `.github/workflows/sf-*.yml` (`workflow_call`) | Composes L1 into a pipeline with business meaning. Typed inputs/outputs, explicit `secrets:`. Never triggered by a human or by Salesforce. |
+| **L3** | `.github/workflows/sf-ops-dispatch.yml` | The single external entry point for Salesforce. Validates, routes to exactly one L2/L1 path, reports the result back. |
+| **L4** | consumer repos | Thin `uses:` callers. Not in this repo. |
+
+Rules: **L1 never calls L1** (an action that only picks between two other actions
+is routing, and belongs in L2/L3); **L3 inlines no Salesforce logic**; no
+pass-through layer that forwards inputs unchanged; workflow nesting caps at 4 and
+L4→L3→L2→action already spends three. Composite actions have **no `secrets`
+context** — secrets arrive as inputs.
+
 ## TypeScript Actions (strict singleton architecture)
 
 All implementation lives in **`gforce-gha-src/`** — the only `.ts` file outside
@@ -100,13 +118,61 @@ Preflight checks the limit the run will actually spend: `Package2VersionCreates`
 `Package2VersionCreatesWithoutValidation` (500/day) when `skip-validation` is true — checking the
 wrong one blocks a build against quota it never consumes.
 
-**Inputs:** `package` (falls back to the single or `default: true` entry), `dev-hub-alias` (default `devhub`), `wait-minutes` (default `60`), `code-coverage` (default `true` — set `false` for packages with no Apex tests), `skip-validation`, `installation-key` (empty ⇒ `--installation-key-bypass`), `preflight-min-headroom` (default `2`), `push-tag` (default `true`), `evidence-path`
+**Inputs:** `package` (falls back to the single or `default: true` entry), `dev-hub-alias` (default `devhub`), `wait-minutes` (default `60`), `code-coverage` (default `true` — set `false` for packages with no Apex tests), `skip-validation`, `branch` (empty ⇒ flag omitted; see below), `installation-key` (empty ⇒ `--installation-key-bypass`), `preflight-min-headroom` (default `2`), `push-tag` (default `true`), `evidence-path`
 **Outputs:** `version-id` (`04t`), `package-version-id` (`05i`), `version-number`, `request-id` (`08c`), `status`, `git-tag`
 **Caller permissions:** `contents: write` (tag push), or `contents: read` when `push-tag: false`
 
 It does **not** resolve dependency order or install anything — callers own that. `wait-minutes` is
 a hard ceiling: if the build is still running when it expires the step fails and prints the
 `sf package version create report` command to resume, rather than waiting a second time.
+
+`branch` is a trap, hence the default of empty: `--branch` does not merely label a version, it
+scopes **dependency resolution** to that branch, so a package whose dependencies resolve via
+`x.y.z.LATEST` fails with `NoReleaseVersionFoundForBranchError` unless those dependencies were
+also built on the same branch.
+
+It currently hardcodes `--tag "$GITHUB_SHA"`. Making that an input is what unlocks
+`create-version` idempotency for the dispatcher — `Package2Version.Tag` is queryable, so a
+preflight SOQL can short-circuit a retried request without spending a quota slot. See
+[ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md), decision 4.
+
+### `sf-scratch-org` (`.github/actions/sf-scratch-org/action.yml`)
+
+Creates a scratch org, refusing to start when the Dev Hub has no capacity. Both governing limits are checked up front (`ActiveScratchOrgs` — how many may exist at once; `DailyScratchOrgs` — how many per rolling 24h) because hitting either produces the same unhelpful `LIMIT_EXCEEDED` from the CLI.
+
+**Inputs:** `definition-file` (default `config/project-scratch-def.json`), `alias` (default `ci-scratch`), `duration-days` (default `1`), `dev-hub-alias` (default `devhub`), `set-default` (default `true`), `wait` (default `30`)
+**Outputs:** `alias`, `org-id`, `username`, `instance-url`
+**Caller permissions:** none beyond the checkout
+
+**It does not delete the org.** Composite actions cannot register a `post:` step — that is JavaScript/Docker actions only — so every caller must pair it with its own `if: always()` `sf org delete scratch --target-org <alias> --no-prompt || true`.
+
+### `sf-package-promote` (`.github/actions/sf-package-promote/action.yml`)
+
+Promotes a 2GP version to released. Promotion is irreversible and a released version stays installable by subscribers forever, so this does two things beyond calling the CLI: it **refuses a version built with `--skip-validation`** (the one guard the platform does not apply), and it treats an already-released version as **success**, so a retried request is a no-op. `sf package version promote` is synchronous — no request object to poll — which is why this is a composite.
+
+**Inputs:** `version-id` (required, `04t…`), `dev-hub-alias` (default `devhub`), `allow-unvalidated` (default `false`)
+**Outputs:** `status` (`promoted` | `already-released`), `promoted`, `version-number`, `package-id`
+**Caller permissions:** `contents: read`
+
+### `sf-package-install` (`.github/actions/sf-package-install/action.yml`)
+
+Installs **one** version into a target org. `sf package install --wait` polls to a terminal state inside the CLI, so there is no polling loop here. Preflights `InstalledSubscriberPackage` in the target org rather than pattern-matching the CLI's failure message, so an already-installed version is success. On failure, queries `SubscriberPackageVersionInstallRequest` and echoes Salesforce's own errors as `::error::` plus an evidence directory for the caller to upload.
+
+**Inputs:** `version-id` (required, `04t…`), `target-org-alias` (default `target`), `installation-key`, `wait-minutes` (default `20`), `publish-wait-minutes` (default `10`), `security-type` (`AdminsOnly` | `AllUsers`, default `AdminsOnly`), `upgrade-type` (`Mixed` | `DeprecateOnly` | `Delete`, default `Mixed`), `evidence-path` (default `evidence`)
+**Outputs:** `status` (`installed` | `already-installed`), `installed`, `install-request-id`, `version-id`
+**Caller permissions:** `contents: read`
+
+2GP dependencies are **not** transitive — install a chain by calling this once per version, dependencies first.
+
+### `sf-ops-callback` (`.github/actions/sf-ops-callback/action.yml`)
+
+Reports a dispatched operation's terminal status back into Salesforce, keyed by the requester's correlation id. Salesforce's dispatch APIs return HTTP 204 with an empty body, so the requester never learns a run id — this closes the loop from the other side. It **always** reports: a failed operation still produces a callback with `status: failed`, because a request that goes silent is worse than one that fails.
+
+**Inputs:** `correlation-id` (required), `operation` (required), `status` (required — `succeeded` | `failed` | `cancelled` | `no-route`), `outputs-json` (default `{}`, must parse as an object), `error-code`, `error-message`, `run-url`, `apex-rest-path` (default `/services/apexrest/gforce/ops-callback/v1`), `org-alias` (default `callback`), `dry-run` (default `false`)
+**Outputs:** `payload` (the rendered JSON, so smoke tests can assert the contract), `http-status`, `delivered`
+**Caller permissions:** `contents: read`
+
+`dry-run: true` renders the payload to the step summary without posting — that is what lets the whole chain be smoke-tested with no org and no secret.
 
 Scope note: the plan in `docs/superpowers/plans/2026-08-05-part1-package-create-action.md` also
 specified a TypeScript twin (`sf-package-create-node`), a `sf-package-create.yml` reusable
@@ -151,6 +217,34 @@ One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consumi
 **Optional caller environment variable:** `SF_ORG_ALIAS` (defaults to the environment name)
 **Outputs:** `component-count`, `deploy-request-id`, `tests` (PR runs); `deploy-id`, `quick-deployed` (push runs)
 **Caller permissions:** `contents: read`, `actions: read`
+
+### `sf-ops-dispatch` (`.github/workflows/sf-ops-dispatch.yml`)
+
+**L3 — the single external entry point.** Salesforce (LWC → Apex → GitHub App JWT → dispatch API) asks for one operation; this routes it to exactly one path and reports the terminal status back. Design record: [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md). Salesforce-side contract: [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
+
+```text
+normalize ─┬─ create-version ──► sf-package-release.yml (L2)
+           ├─ create-version-dry-run
+           ├─ promote ────────► sf-package-promote (L1)   [environment gate]
+           ├─ install ────────► sf-package-install  (L1)  [environment gate]
+           └─ report (needs: all, if: always()) ──► sf-ops-callback (L1)
+```
+
+**Key inputs:** `operation` (`create-version` | `promote` | `install`), `correlation-id`, `package`, `version-id`, `target-org-alias`, `environment` (default `sf-ops`), `dry-run`, plus `source-dirs` / `run-validate` / `skip-validation` (create-version) and `allow-unvalidated` (promote)
+**Secrets:** `dev-hub-auth-url`, `target-org-auth-url`, `callback-auth-url`, `installation-key` (all optional — which ones are needed depends on the operation)
+**Caller permissions:** `contents: write` (the `create-version` route pushes a tag and cuts a release)
+
+Three invariants this file exists to hold, all easy to break by accident:
+
+1. **A skipped job is green.** `report` `needs:` every route and fails the run when none ran, so an operation matching no route is `no-route`, not success.
+2. **`normalize` never fails on a bad request.** It sets `valid=false` and passes the reason on, so `report` can still call Salesforce back *before* the run goes red. Failing there would leave the requester waiting on a run it can never learn the fate of.
+3. **Untrusted values reach `github-script` through `env:` only.** A `${{ }}` inside a `script:` body is substituted before Node parses it — that is script injection.
+
+`run-name:` cannot carry the correlation id from here: a called workflow's `run-name` is ignored and the caller's applies. The L4 template in the consuming doc sets it.
+
+### `sf-ops-dispatch-smoke` (`.github/workflows/sf-ops-dispatch-smoke.yml`)
+
+Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion *is* a red run: a job calling a reusable workflow cannot take `continue-on-error`.
 
 ### `test-simple` (`.github/workflows/test-simple.yml`)
 

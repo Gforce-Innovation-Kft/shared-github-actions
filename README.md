@@ -69,8 +69,34 @@ matches plus a reference scan of test classes in the source tree.
   with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
   `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.
   Requires a `fetch-depth: 0` checkout.
+- **`sf-scratch-org`** — create a scratch org, refusing to start when the Dev Hub
+  has no capacity (both `ActiveScratchOrgs` and `DailyScratchOrgs` are checked).
+  **Does not delete the org** — composite actions cannot register a `post:` step,
+  so pair it with your own `if: always()` `sf org delete scratch`.
+- **`sf-package-create`** — build **one** 2GP package version: Dev Hub headroom
+  preflight, `sf package version create`, provenance tag, and
+  `Package2VersionCreateRequestError` evidence on failure. Outputs `version-id`
+  (`04t`), `version-number`, `git-tag`.
+- **`sf-package-promote`** — promote a `04t` to released. Refuses a version built
+  with `--skip-validation` unless `allow-unvalidated`; an already-released
+  version is success, not failure. Outputs `status`, `version-number`.
+- **`sf-package-install`** — install one `04t` into a target org, polling to a
+  terminal state. Preflights the org so an already-installed version is success;
+  surfaces Salesforce's own install errors on failure. Outputs `status`,
+  `install-request-id`.
+- **`sf-ops-callback`** — report a dispatched operation's terminal status back
+  into Salesforce, keyed by the requester's correlation id. `dry-run: true`
+  renders the payload without posting.
 
 ## Reusable Workflows
+
+- **`sf-ops-dispatch.yml`** — **L3, the single external entry point** for
+  Salesforce-initiated operations (`create-version`, `promote`, `install`).
+  Validates the request, routes it to exactly one L2/L1 path, and reports the
+  terminal status back through `sf-ops-callback`. An operation that matches no
+  route fails the run instead of showing green. See
+  [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md) and
+  [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
 
 - **`salesforce-code-analyzer.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
