@@ -237,7 +237,10 @@ jobs:
 | `installation-key` | `install`, only when the version was built with one |
 
 Produce an auth URL with
-`sf org display --verbose --json --target-org <alias> | jq -r '.result.sfdxAuthUrl'`.
+`sf org auth show-sfdx-auth-url --target-org <alias> --json | jq -rj '.result.sfdxAuthUrl'`.
+`sf org display` redacts the field as of CLI 2.14x and returns the literal string
+`[REDACTED] …`, which stores cleanly as a secret and then fails at login with
+`INVALID_SFDX_AUTH_URL`. `jq -rj` (not `-r`) omits the trailing newline.
 
 ### GitHub App permissions
 
