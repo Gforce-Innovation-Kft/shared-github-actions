@@ -19,6 +19,30 @@ Recorded in [ADR 0002](docs/adr/0002-naming-and-repo-structure.md). Two rules:
   `ci-sf-ops-dispatch-smoke.yml`). GitHub forbids subdirectories under
   `.github/workflows/`, so the name is the only available separator.
 
+## Before you change ANY action or workflow: check the usage catalog
+
+Everything here is consumed by other repositories, so a change is never local.
+[`docs/usage-catalog.md`](docs/usage-catalog.md) lists every known consumer of every
+action and reusable workflow — repo, file, and the ref it is pinned to. There is a
+machine-readable twin at [`docs/usage-catalog.json`](docs/usage-catalog.json).
+
+**Required before renaming or removing an input, output, or file, and before
+changing a default:**
+
+1. Read the catalog entry for the asset you are touching.
+2. Note the **pinned ref** of each consumer. `@develop` consumers break the moment
+   you push; `@v1` consumers are insulated until a release re-points them.
+3. If the catalog shows no consumers, confirm with the human — the scan covers
+   default branches in this org only, so a consumer on a feature branch is
+   invisible. Its "Scope and limitations" section spells out what it cannot see.
+4. Regenerate after adding a consumer: `./.github/scripts/build-usage-catalog.sh`
+   (needs `gh` + `jq`). CI refreshes it weekly via `catalog-refresh.yml`.
+
+A default is a breaking change when the old behaviour was load-bearing. Changing
+`container-user` from `root` to `1001`, for instance, breaks every consumer whose
+image lacks a passwd entry for UID 1001 — which is why that flip waits on
+sf-docker-images v3.0.0.
+
 ## Reference Pattern
 
 From other repos, reference items using:
