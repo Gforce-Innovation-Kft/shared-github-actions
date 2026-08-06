@@ -401,10 +401,14 @@ amendment, and the procedure in CONTRIBUTING.md.
 
 Eight repo-scoped skills are committed. They live in `.agents/skills/`, are symlinked
 into `.claude/skills/`, and are pinned by content hash in
-[`skills-lock.json`](skills-lock.json). All are vendored from upstream — check and
-update them with `npx skills check` / `npx skills update`; do not hand-edit a
-vendored `SKILL.md`, since the next `update` overwrites it and the hash check will
-flag the drift.
+[`skills-lock.json`](skills-lock.json). All are vendored from upstream — do not
+hand-edit a vendored `SKILL.md`; the next update overwrites it and the hash stops
+matching.
+
+> **`npx skills check` is not read-only** — despite the name it fetches upstream and
+> rewrites the `SKILL.md` files and `skills-lock.json` in place, so it dirties the
+> working tree. Run it deliberately, on its own branch, and review the diff and the
+> changed hashes as a real content change; never run it mid-PR expecting a report.
 
 Invoke the relevant one when the task matches:
 
