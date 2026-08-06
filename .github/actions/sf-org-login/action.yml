@@ -128,7 +128,7 @@ runs:
     # at runtime against the released tag.
     - name: Get Salesforce credentials from AWS Secrets Manager
       if: ${{ inputs.auth-method == 'jwt' }}
-      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/get-aws-secret@v1
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/aws-secret-get@v1
       with:
         aws-region: ${{ inputs.aws-region }}
         secret-name: ${{ inputs.secret-name }}

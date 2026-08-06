@@ -8,7 +8,7 @@ updates:
     # directories listed explicitly.
     directories:
       - "/"
-      - "/.github/actions/get-aws-secret"
+      - "/.github/actions/aws-secret-get"
       - "/.github/actions/sf-org-login"
     schedule:
       interval: "weekly"

@@ -7,11 +7,19 @@ Salesforce CI/CD. Reference them from any repo in the org.
 ```text
 TypeScript action: Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
 Composite action:  Gforce-Innovation-Kft/shared-github-actions/.github/actions/<name>@v1
-Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/<name>.yml@v1
+Reusable workflow: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-<name>.yml@v1
 ```
 
 See [Versioning](#versioning) for how to pin (`@v1`, `@v1.2.0`, or a full
 commit SHA — avoid `@main` in production callers).
+
+**Naming** ([ADR 0002](docs/adr/0002-naming-and-repo-structure.md)): actions are
+`<domain>-<object>-<verb>` (`sf-package-create`, `aws-secret-get`,
+`github-branch-sync`); workflows you may call are prefixed `reusable-`, and
+anything unprefixed is this repo's own CI.
+
+> `v1` is frozen at the pre-rename layout, so callers pinned to `@v1` keep
+> working. The names below land in the next major tag.
 
 **New here?** [`docs/pipeline-map.md`](docs/pipeline-map.md) is the whole system
 on one page: flow diagrams of the four layers, the Salesforce dispatch chain, and
@@ -24,7 +32,7 @@ Thin Node20 entry points over a strict, class-based singleton architecture in
 `gforce-gha-src/`. Each ships a committed `dist/index.js`. Full input/output
 lists live in each `action.yml`; runnable callers are in [`examples/`](examples).
 
-### `sync-branches`
+### `github-branch-sync`
 
 Synchronize one branch into another: fast-forward when possible, else a
 server-side merge, else open a "sync" pull request on conflict.
@@ -33,7 +41,7 @@ server-side merge, else open a "sync" pull request on conflict.
 - **Key outputs:** `synced`, `action`, `result-sha`, `pull-request-number`, `pull-request-url`, `ahead-by`, `behind-by`, `reason`.
 - **Permissions:** `contents: write` (moves the target ref / merges) + `pull-requests: write` (opens the sync PR on conflict).
 
-### `create-release-pr`
+### `github-release-pr-create`
 
 Create or update a release pull request between two branches, with a templated
 title/body, labels, and reviewers.
@@ -45,7 +53,7 @@ title/body, labels, and reviewers.
 > `dry-run` defaults to `true` on both actions — a caller must explicitly opt in
 > to mutating state.
 
-### `sf-find-tests`
+### `sf-apex-test-select`
 
 Select the Apex test classes relevant to a delta `package.xml` — naming-convention
 matches plus a reference scan of test classes in the source tree.
@@ -59,7 +67,7 @@ matches plus a reference scan of test classes in the source tree.
 
 ## Composite Actions
 
-- **`get-aws-secret`** — fetch a secret from AWS Secrets Manager via OIDC role
+- **`aws-secret-get`** — fetch a secret from AWS Secrets Manager via OIDC role
   assumption; JSON fields are exported as env vars (reference them as
   `${{ env.FIELD }}`, not step outputs). Requires `id-token: write` +
   `contents: read`.
@@ -70,18 +78,19 @@ matches plus a reference scan of test classes in the source tree.
   Outputs `org-id`, `username`, `instance-url`, `access-token` (masked); cleans
   up every credential file in an `if: always()` step.
   Replaces the former `sf-jwt-login` — see [CLAUDE.md](CLAUDE.md#sf-org-login--githubactionssf-org-loginactionyml).
-- **`sf-delta-package`** — generate a delta `package.xml` between two git refs
+- **`sf-source-delta`** — generate a delta `package.xml` between two git refs
   with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
   `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.
   Requires a `fetch-depth: 0` checkout.
-- **`sf-scratch-org`** — create a scratch org, refusing to start when the Dev Hub
+- **`sf-org-scratch-create`** — create a scratch org, refusing to start when the Dev Hub
   has no capacity (both `ActiveScratchOrgs` and `DailyScratchOrgs` are checked).
   **Does not delete the org** — composite actions cannot register a `post:` step,
   so pair it with your own `if: always()` `sf org delete scratch`.
 - **`sf-package-create`** — build **one** 2GP package version: Dev Hub headroom
-  preflight, `sf package version create`, provenance tag, and
-  `Package2VersionCreateRequestError` evidence on failure. Outputs `version-id`
-  (`04t`), `version-number`, `git-tag`.
+  preflight, `sf package version create`, and `Package2VersionCreateRequestError`
+  evidence on failure. Outputs `package-name`, `version-id` (`04t`),
+  `version-number`. Needs only `contents: read` — the provenance tag is pushed by
+  `reusable-sf-package-release.yml`, not here.
 - **`sf-package-promote`** — promote a `04t` to released. Refuses a version built
   with `--skip-validation` unless `allow-unvalidated`; an already-released
   version is success, not failure. Outputs `status`, `version-number`.
@@ -95,7 +104,7 @@ matches plus a reference scan of test classes in the source tree.
 
 ## Reusable Workflows
 
-- **`sf-ops-dispatch.yml`** — **L3, the single external entry point** for
+- **`reusable-sf-ops-dispatch.yml`** — **L3, the single external entry point** for
   Salesforce-initiated operations (`create-version`, `promote`, `install`).
   Validates the request, routes it to exactly one L2/L1 path, and reports the
   terminal status back through `sf-ops-callback`. An operation that matches no
@@ -103,37 +112,34 @@ matches plus a reference scan of test classes in the source tree.
   [ADR 0001](docs/adr/0001-salesforce-dispatch-layer.md) and
   [docs/consuming-sf-dispatch.md](docs/consuming-sf-dispatch.md).
 
-- **`salesforce-code-analyzer.yml`** — run Salesforce Code Analyzer with quality
+- **`reusable-sf-code-analyze.yml`** — run Salesforce Code Analyzer with quality
   gates; posts PR comments. Caller needs `pull-requests: write`, `contents: read`,
   `actions: read`.
-- **`sf-pr-validate.yml`** — PR code health: `jest` runs `npm test` when the
+- **`reusable-sf-pr-validate.yml`** — PR code health: `jest` runs `npm test` when the
   consumer's `package.json` has a `test` script (skips with a notice
   otherwise); `scratch-org` creates a 1-day scratch org from
   `config/scratch-orgs/ci.json`, deploys, assigns permission sets, runs
   `RunLocalTests` with coverage, uploads results, always deletes the org.
   Secret: `sfdx-auth-url`. Caller needs `contents: read`. See
   [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
-- **`sf-release.yml`** — one workflow, two phases: on `pull_request`, a delta
-  package + `sf-find-tests`-selected Apex tests, check-only deploy against the
+- **`reusable-sf-release.yml`** — one workflow, two phases: on `pull_request`, a delta
+  package + `sf-apex-test-select`-selected Apex tests, check-only deploy against the
   target org, and an `sf-release-<run>` handoff artifact; on `push` to main (or
   `workflow_dispatch`), behind the caller's environment gate, quick-deploys the
   validated request (fallback: delta → full; `full-deploy: true` forces the
   full path). Secret: `sfdx-auth-url`. Caller needs `contents: read`,
   `actions: read`. See [docs/consuming-sf-cicd.md](docs/consuming-sf-cicd.md).
-- **`docker-build-test-push.yml`** — build → test → push for **one** Docker image
-  (callers fan out with a matrix). Buildx build with per-image GHA cache scope,
-  pytest-testinfra + Trivy SARIF test stage, multi-arch Docker Hub push with
-  SBOM/provenance, **keyless cosign signing**, optional Docker Hub README sync,
-  and a `version-report-<image>` artifact (Node/npm/SF CLI/plugin versions read
-  from the built image) for release-note aggregation. Key inputs: `image-name`,
-  `context`, `push` (default `false`), `image-description`; secret:
-  `dockerhub-token` (only needed when `push: true`). Caller needs
-  `contents: read`, `checks: write`, `pull-requests: write`,
-  `security-events: write`, and `id-token: write` (cosign). Artifact names derive
-  from `image-name`, so it must be unique per caller run. Do **not** rename or
-  move the workflow file — its path is part of the cosign certificate identity,
-  and renaming breaks every documented `cosign verify` command.
-- **`test-simple.yml`** — minimal echo workflow for verifying cross-repo calls.
+
+> **Docker moved out.** `docker-build-test-push.yml` now lives in
+> [`sf-docker-images`](https://github.com/Gforce-Innovation-Kft/sf-docker-images)
+> as `.github/workflows/reusable-docker-image-build.yml`, alongside its only
+> consumer. See [ADR 0002](docs/adr/0002-naming-and-repo-structure.md),
+> decision 3. This repository covers Salesforce, GitHub, and AWS.
+
+### Internal CI (not callable)
+
+Workflows without the `reusable-` prefix are this repo's own CI: `ci.yml`,
+`ci-sf-ops-dispatch-smoke.yml`, and `release.yml`.
 
 ## Versioning
 
@@ -162,7 +168,7 @@ gforce-gha-src/                    # ALL TypeScript implementation (single sourc
                                    #   clients/github/ (sub-clients + facade), services/,
                                    #   libraries/salesforce/, selectors, utils, __tests__/
 .github/actions/<name>             # action.yml + entry index.ts + committed esbuild dist/index.js
-.github/actions/get-aws-secret     # composite actions
+.github/actions/aws-secret-get     # composite actions
 .github/workflows                  # CI + reusable workflows
 examples/                          # runnable caller workflows
 docs/                              # architecture + authoring guides

@@ -1,6 +1,6 @@
 # Consuming the Salesforce ops dispatch layer
 
-The contract between Salesforce and `sf-ops-dispatch.yml` (L3). Everything here is
+The contract between Salesforce and `reusable-sf-ops-dispatch.yml` (L3). Everything here is
 what the Apex/LWC side codes against; the reasoning behind it is in
 [ADR 0001](adr/0001-salesforce-dispatch-layer.md).
 
@@ -80,7 +80,7 @@ rejects the whole request with `INVALID_INPUT` — and still produces a callback
 
 | `operation` | Route | Does | Reports back |
 |---|---|---|---|
-| `create-version` | L2 `sf-package-release.yml` | Validates the source in a scratch org, builds a 2GP version, pushes the provenance tag, cuts a GitHub Release | `version-id`, `version-number`, `git-tag` |
+| `create-version` | L2 `reusable-sf-package-release.yml` | Validates the source in a scratch org, builds a 2GP version, pushes the provenance tag, cuts a GitHub Release | `version-id`, `version-number`, `git-tag` |
 | `promote` | L1 `sf-package-promote` | Promotes a `04t` to released. **Refuses** a version built with `--skip-validation` unless the caller opts in. Already-released is success. | `status` (`promoted` \| `already-released`), `version-number` |
 | `install` | L1 `sf-package-install` | Installs one `04t` into the target org, polling to a terminal state. Already-installed is success. | `status` (`installed` \| `already-installed`), `install-request-id` |
 
@@ -210,7 +210,7 @@ jobs:
   dispatch:
     permissions:
       contents: write
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/sf-ops-dispatch.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-ops-dispatch.yml@v1
     with:
       # client_payload wins on repository_dispatch; inputs are the fallback.
       # Both are re-validated by the dispatcher — this is forwarding, not trust.

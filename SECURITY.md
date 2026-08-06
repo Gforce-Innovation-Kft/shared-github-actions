@@ -21,7 +21,7 @@ the issue, steps to reproduce, and the affected action/workflow.
   mutable branch.
 - Grant callers only the permissions documented per action in the
   [README](README.md) (`permissions:` blocks are least-privilege).
-- Secrets consumed via `get-aws-secret` / `sf-org-login` (`auth-method: jwt`)
+- Secrets consumed via `aws-secret-get` / `sf-org-login` (`auth-method: jwt`)
   come from AWS Secrets Manager over OIDC; no long-lived credentials or PATs are
   used, and key files are removed in `if: always()` cleanup steps.
 - `sf-org-login` can emit the org's `access-token` for actions that call the

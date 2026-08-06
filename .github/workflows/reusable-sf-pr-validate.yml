@@ -1,0 +1,148 @@
+name: Salesforce PR Validate (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      sfdx-auth-url:
+        description: 'SFDX auth URL of the Dev Hub (used to create the scratch org)'
+        required: true
+    inputs:
+      container-image:
+        description: 'Docker image the jobs run in'
+        required: false
+        default: 'gforceinnovation/sf-ci:latest'
+        type: string
+      checkout-submodules:
+        description: 'Passed to actions/checkout submodules (false, true, recursive)'
+        required: false
+        default: 'recursive'
+        type: string
+      scratch-org-definition:
+        description: 'Scratch org definition file. Was hardcoded to config/scratch-orgs/ci.json; consumers that keep their definition elsewhere can now point at it.'
+        required: false
+        default: 'config/scratch-orgs/ci.json'
+        type: string
+      retention-days:
+        description: 'Retention for the scratch-org test results artifact'
+        required: false
+        default: 90
+        type: number
+
+jobs:
+  jest:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
+    permissions:
+      contents: read
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      - name: Detect npm test script
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          HAS_TESTS=$(node -pe "(() => { try { return ((require('./package.json').scripts || {}).test) ? 'true' : 'false'; } catch { return 'false'; } })()")
+          echo "has-tests=$HAS_TESTS" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_TESTS" != "true" ]; then
+            echo "::notice::No npm test script found — skipping Jest tests."
+          fi
+
+      - name: Install dependencies
+        if: steps.detect.outputs.has-tests == 'true'
+        shell: bash
+        run: npm ci
+
+      - name: Run Jest tests
+        if: steps.detect.outputs.has-tests == 'true'
+        shell: bash
+        run: npm test
+
+  scratch-org:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.container-image }}
+      # Runner file-command dirs are owned by the host runner user; non-root
+      # container users (e.g. sf-devcontainer's vscode) hit EACCES without this.
+      options: --user root
+    permissions:
+      contents: read
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      # Own-repo absolute refs: a `./` ref inside a reusable workflow resolves
+      # against the *caller's* checkout, so self-references must be absolute.
+      # Pinned to @develop until a release is cut — see ADR 0002, decision 6.
+      - name: Salesforce Dev Hub login
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        with:
+          sfdx-auth-url: ${{ secrets.sfdx-auth-url }}
+          org-alias: devhub
+          set-default-dev-hub: 'true'
+
+      - name: Create scratch org
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@develop
+        with:
+          definition-file: ${{ inputs.scratch-org-definition }}
+          alias: ci-scratch
+          dev-hub-alias: devhub
+          duration-days: "1"
+
+      - name: Push source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sf project deploy start --target-org ci-scratch --wait 60
+
+      - name: Assign permission sets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          for PS_FILE in force-app/**/permissionsets/*.permissionset-meta.xml; do
+            PS_NAME=$(basename "$PS_FILE" .permissionset-meta.xml)
+            sf org assign permset --name "$PS_NAME" --target-org ci-scratch \
+              || echo "::warning::Could not assign permission set $PS_NAME"
+          done
+
+      - name: Run Apex tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          sf apex run test \
+            --target-org ci-scratch \
+            --test-level RunLocalTests \
+            --wait 30 \
+            --result-format human \
+            --code-coverage | tee scratch-org-tests.txt
+          {
+            echo '## Scratch org test results'
+            echo '```'
+            tail -n 40 scratch-org-tests.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scratch-org-tests-${{ github.run_number }}
+          path: scratch-org-tests.txt
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: ignore
+
+      - name: Delete scratch org
+        if: always()
+        shell: bash
+        run: |
+          sf org delete scratch --target-org ci-scratch --no-prompt || true

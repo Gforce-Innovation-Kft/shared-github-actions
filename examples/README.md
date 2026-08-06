@@ -36,7 +36,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -56,7 +56,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -80,7 +80,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -104,7 +104,7 @@ on:
 
 jobs:
   analyze-force-app:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -114,7 +114,7 @@ jobs:
       results-artifact-name: 'force-app-results'
 
   analyze-apex-common:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -139,7 +139,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -163,7 +163,7 @@ on:
 
 jobs:
   analyze:
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read
@@ -214,7 +214,7 @@ jobs:
             fail-sev1: true
             fail-sev2: false
             max-violations: 10
-    uses: <your-org>/shared-github-action/.github/workflows/salesforce-code-analyzer.yml@main
+    uses: <your-org>/shared-github-action/.github/workflows/reusable-sf-code-analyze.yml@main
     permissions:
       pull-requests: write
       contents: read

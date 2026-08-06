@@ -1,0 +1,58 @@
+name: 'GitHub Release PR Create'
+description: 'Create or update a release pull request between two branches, with templated title/body, labels, and reviewers.'
+author: 'GForce Innovation'
+
+# Required caller permissions:
+#   contents: read         # compare branches
+#   pull-requests: write   # create/update the release PR, labels, reviewers
+
+inputs:
+  source-branch:
+    description: 'Branch containing the changes to release.'
+    required: true
+  target-branch:
+    description: 'Branch the release is merged into.'
+    required: true
+  release-version:
+    description: 'Version identifier for the release (e.g. v1.2.0).'
+    required: true
+  title:
+    description: 'Pull request title. Defaults to "Release <release-version>".'
+    required: false
+  body-template:
+    description: 'Body template. Supports {{version}}, {{source}}, {{target}}, {{commits}}, {{files}}.'
+    required: false
+  draft:
+    description: 'When true, open the pull request as a draft.'
+    required: false
+    default: 'false'
+  labels:
+    description: 'Comma- or newline-separated labels to apply.'
+    required: false
+  reviewers:
+    description: 'Comma- or newline-separated GitHub usernames to request review from.'
+    required: false
+  dry-run:
+    description: 'When true, report the computed PR without creating or updating anything.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used to call the GitHub API.'
+    required: true
+    default: ${{ github.token }}
+
+outputs:
+  pull-request-number:
+    description: 'Number of the created or updated release pull request.'
+  pull-request-url:
+    description: 'URL of the created or updated release pull request.'
+  created:
+    description: 'true when a new pull request was created.'
+  updated:
+    description: 'true when an existing pull request was updated.'
+  dry-run:
+    description: 'Echoes whether this run was a dry run.'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

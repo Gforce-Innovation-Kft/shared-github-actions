@@ -1,0 +1,41 @@
+# Example caller for the github-release-pr-create TypeScript action.
+# Copy into a consuming repo's .github/workflows/ and adjust branches.
+name: Create release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: 'Release version (e.g. v1.2.0)'
+        required: true
+      dry-run:
+        description: 'Plan only (make no changes)'
+        type: boolean
+        default: true
+
+# Least privilege: this action only reads commits to compare branches and
+# creates/updates the PR (with labels + reviewers). It never moves a ref, so
+# contents stays read-only.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update the release PR
+        id: release
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/github-release-pr-create@v1
+        with:
+          source-branch: develop
+          target-branch: main
+          release-version: ${{ inputs.release-version }}
+          labels: release, automated
+          dry-run: ${{ inputs.dry-run }}
+
+      - name: Report outcome
+        run: |
+          echo "created=${{ steps.release.outputs.created }}"
+          echo "updated=${{ steps.release.outputs.updated }}"
+          echo "pull-request=${{ steps.release.outputs.pull-request-url }}"
