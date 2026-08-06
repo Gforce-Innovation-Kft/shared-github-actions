@@ -380,21 +380,19 @@ amendment, and the procedure in CONTRIBUTING.md.
 - All shell steps in composite actions must specify `shell: bash`.
 - Commit messages use prefix format: `Add:`, `Fix:`, `Update:`, `Docs:`, `Test:`, `Refactor:`.
 - Always clean up sensitive files (keys, credentials) in an `if: always()` step.
-- Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment;
-  Dependabot updates both. Its `directories:` list must name every action directory
-  that contains a `uses:` — only `aws-secret-get` and `sf-org-login` do today, and a
-  new composite action with a third-party `uses:` must be added there or it goes
-  unwatched.
-
-> **Known deviation — 20 tag-pinned refs.** `ci.yml`, `release.yml` and both composite
-> action manifests are correctly SHA-pinned, but the five newer workflows
-> (`reusable-sf-{package-release,release,ops-dispatch,pr-validate}.yml`,
-> `catalog-refresh.yml`) still pin `actions/checkout@v7`, `actions/upload-artifact@v7`,
-> `actions/download-artifact@v8`, `actions/github-script@v9` and
-> `peter-evans/create-pull-request@v7` by tag. `peter-evans/create-pull-request` is the
-> one that matters most — it is not a GitHub-owned action and runs with
-> `contents: write` + `pull-requests: write`. Convert these to SHAs; do not add new
-> tag-pinned refs.
+- Third-party actions are pinned to the **floating major tag** — `actions/checkout@v7`,
+  `aws-actions/configure-aws-credentials@v6`, `forcedotcom/run-code-analyzer@v2`. Never
+  a bare `@main`, never an unversioned ref, and do not mix styles: the repo was
+  half-SHA/half-tag until 2026-08-06 and the inconsistency was itself the bug, because
+  the documented convention no longer matched any particular file.
+- Dependabot then only fires on a **major** bump. Patch and minor releases arrive
+  silently, which is the trade-off accepted here: fewer dependency PRs, at the cost of
+  trusting each publisher not to force-move a tag. A tag is mutable; a SHA is not. If
+  you add an action that is security-critical or not from a well-known publisher, pin
+  its SHA and say why in a comment — a deliberate exception is fine, drift is not.
+- Dependabot's `directories:` list must name every action directory containing a
+  `uses:` — only `aws-secret-get` and `sf-org-login` do today. A new composite action
+  with a third-party `uses:` must be added there or it goes unwatched.
 
 <!-- skills-tooling -->
 ## Skills & AI tooling

@@ -229,8 +229,11 @@ rebuilds and re-stages action bundles; CI's `dist:verify` fails on a stale bundl
 
 - Reference actions/workflows by release tag (`@v2`, `@v2.0.0`) — see
   [Versioning](#versioning); never `@main` in production.
-- Third-party actions in this repo are pinned to full commit SHAs with a
-  `# vX.Y.Z` comment; Dependabot keeps them current.
+- Third-party actions are pinned to the **floating major tag** (`actions/checkout@v7`,
+  `aws-actions/configure-aws-credentials@v6`); Dependabot opens a PR when a new major
+  appears. Patch and minor fixes arrive without a commit here — which is the point,
+  and also the trade-off: a tag is mutable, so this trusts the action's publisher not
+  to move it. Use a SHA instead for anything security-critical.
 - Commit prefixes: `Add:`, `Fix:`, `Update:`, `Docs:`, `Test:`, `Refactor:`.
 - Composite actions use `using: "composite"` with `shell: bash`; always clean up
   secrets in an `if: always()` step.
