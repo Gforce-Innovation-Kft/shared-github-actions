@@ -210,7 +210,7 @@ jobs:
   dispatch:
     permissions:
       contents: write
-    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-ops-dispatch.yml@v1
+    uses: Gforce-Innovation-Kft/shared-github-actions/.github/workflows/reusable-sf-ops-dispatch.yml@v2
     with:
       # client_payload wins on repository_dispatch; inputs are the fallback.
       # Both are re-validated by the dispatcher — this is forwarding, not trust.
