@@ -82,6 +82,14 @@ on:
       sfdx-auth-url:
         description: "SFDX auth URL of the Dev Hub"
         required: true
+      scratch-org-auth-url:
+        description: >-
+          SFDX auth URL of an EXISTING scratch org to validate in. When set,
+          `validate` logs into that org instead of creating one, and does not
+          delete it afterwards. Intended for debugging the release flow without
+          spending a scratch org per iteration — Dev Hub caps both concurrent
+          and daily creates. Leave empty for normal runs.
+        required: false
     outputs:
       version-id:
         description: "SubscriberPackageVersionId (04t) — the id you install"
@@ -121,7 +129,34 @@ jobs:
           org-alias: devhub
           set-default-dev-hub: "true"
 
+      # Whether we create an org or borrow one is decided once, here, so the
+      # create and delete steps cannot disagree. This is a step output rather
+      # than `if: secrets.x != ''` because the `secrets` context is not
+      # dependable in a step-level `if:` — a wrong answer here either leaks an
+      # org or deletes someone else's.
+      - name: Resolve scratch org source
+        id: org-source
+        shell: bash
+        env:
+          REUSE_AUTH_URL: ${{ secrets.scratch-org-auth-url }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REUSE_AUTH_URL:-}" ]; then
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Reusing the scratch org supplied by the caller — none will be created or deleted."
+          else
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reuse existing scratch org
+        if: ${{ steps.org-source.outputs.reuse == 'true' }}
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@develop
+        with:
+          sfdx-auth-url: ${{ secrets.scratch-org-auth-url }}
+          org-alias: release-check
+
       - name: Create scratch org
+        if: ${{ steps.org-source.outputs.reuse != 'true' }}
         uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-scratch-create@develop
         with:
           definition-file: ${{ inputs.scratch-org-definition }}
@@ -197,8 +232,9 @@ jobs:
           if-no-files-found: ignore
 
       # sf-org-scratch-create does not delete — composite actions cannot post-run.
+      # Only ever delete an org this job created; a borrowed one is the caller's.
       - name: Delete scratch org
-        if: always()
+        if: ${{ always() && steps.org-source.outputs.reuse != 'true' }}
         shell: bash
         run: sf org delete scratch --target-org release-check --no-prompt || true
 
