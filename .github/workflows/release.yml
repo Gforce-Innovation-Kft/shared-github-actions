@@ -32,5 +32,9 @@ jobs:
           MAJOR="${TAG%%.*}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa "$MAJOR" -m "Point $MAJOR at $TAG" "$TAG"
+          # `$TAG^{}` peels the annotated tag to the commit. Without it git tags a
+          # tag — a nested tag — and `refs/tags/$MAJOR` then points at the v-tag
+          # object rather than the commit. Actions still resolves it by peeling, so
+          # this stays invisible until something reads the ref directly.
+          git tag -fa "$MAJOR" -m "Point $MAJOR at $TAG" "$TAG^{}"
           git push origin "$MAJOR" --force

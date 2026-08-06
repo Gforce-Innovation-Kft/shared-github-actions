@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "org": "Gforce-Innovation-Kft",
-  "generatedAt": "2026-08-06T15:09:52Z",
+  "generatedAt": "2026-08-06T17:06:27Z",
   "assets": [
     {
       "kind": "actions",
-      "name": "get-aws-secret",
+      "name": "aws-secret-get",
       "consumers": [
         {
           "repo": "shared-github-actions",
           "references": [
             {
-              "file": ".github/actions/sf-jwt-login/action.yml",
-              "ref": "main"
+              "file": ".github/actions/sf-org-login/action.yml",
+              "ref": "v2"
             }
           ]
         }
@@ -20,29 +20,14 @@
     },
     {
       "kind": "actions",
-      "name": "sf-delta-package",
+      "name": "sf-apex-test-select",
       "consumers": [
         {
           "repo": "shared-github-actions",
           "references": [
             {
-              "file": ".github/workflows/sf-release.yml",
-              "ref": "v1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "kind": "actions",
-      "name": "sf-find-tests",
-      "consumers": [
-        {
-          "repo": "shared-github-actions",
-          "references": [
-            {
-              "file": ".github/workflows/sf-release.yml",
-              "ref": "v1"
+              "file": ".github/workflows/reusable-sf-release.yml",
+              "ref": "v2"
             }
           ]
         }
@@ -65,18 +50,135 @@
     },
     {
       "kind": "actions",
+      "name": "sf-ops-callback",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
       "name": "sf-org-login",
       "consumers": [
         {
           "repo": "shared-github-actions",
           "references": [
             {
-              "file": ".github/workflows/sf-pr-validate.yml",
-              "ref": "v1"
+              "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
             },
             {
-              "file": ".github/workflows/sf-release.yml",
-              "ref": "v1"
+              "file": ".github/workflows/reusable-sf-package-release.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/reusable-sf-pr-validate.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/reusable-sf-release.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-org-scratch-create",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-package-release.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/reusable-sf-pr-validate.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-package-create",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-package-release.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-package-install",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-package-promote",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-source-delta",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-release.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "workflows",
+      "name": "reusable-sf-package-release.yml",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
             }
           ]
         }
