@@ -372,17 +372,37 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          # curl, not gh: the sf-ci container has no GitHub CLI. And not
+          # `git clone --bare` either — that downloads the entire history to
+          # give `git tag` an object to point at, for what is one ref update.
+          API="https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs"
           REF="tags/deployed/$ENVIRONMENT"
-          # One API call. Cloning the repo — even bare — to give `git tag` an
-          # object to point at downloads the entire history for a ref update.
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/$REF" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/$REF" \
-              -f sha="$GITHUB_SHA" -F force=true --silent
-          else
-            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/$REF" -f sha="$GITHUB_SHA" --silent
+
+          api() {
+            curl -sS -o /tmp/ref-response.json -w '%{http_code}' \
+              -X "$1" "$2" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -d "$3"
+          }
+
+          # PATCH updates an existing ref; 422 means it does not exist yet, so
+          # create it. Checking first would cost a second round-trip.
+          CODE=$(api PATCH "$API/$REF" "{\"sha\":\"$GITHUB_SHA\",\"force\":true}")
+          if [ "$CODE" = "422" ] || [ "$CODE" = "404" ]; then
+            CODE=$(api POST "$API" "{\"ref\":\"refs/$REF\",\"sha\":\"$GITHUB_SHA\"}")
           fi
-          echo "deployed/$ENVIRONMENT -> ${GITHUB_SHA:0:7}"
+
+          case "$CODE" in
+            200|201) echo "deployed/$ENVIRONMENT -> ${GITHUB_SHA:0:7}" ;;
+            *)
+              echo "::error::Could not move deployed/$ENVIRONMENT (HTTP $CODE). The deployment succeeded, so the next delta will recompute from the old base and redeploy these components." >&2
+              cat /tmp/ref-response.json >&2
+              exit 1
+              ;;
+          esac
 
       - name: Summary
         if: always()
