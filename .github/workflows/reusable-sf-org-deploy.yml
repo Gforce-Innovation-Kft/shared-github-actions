@@ -230,6 +230,7 @@ jobs:
           fi
 
           echo "::error::Secret detected in the deployment artifact. Not uploading."
+          # shellcheck disable=SC2016  # ${...} below are JS template literals
           node -e '
             const fs = require("fs");
             let f = [];
