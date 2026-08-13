@@ -64,9 +64,6 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # ==========================================================================
-    # 1. Verify — before anything touches an org
-    # ==========================================================================
     - name: Verify the artifact checksum
       id: verify
       shell: bash
@@ -90,15 +87,10 @@ runs:
         fi
         [ -n "$WANT" ] || { echo "::error::Could not determine the expected checksum." >&2; exit 1; }
 
-        # Must match sf-artifact-build's scope exactly: metadata AND the secret
-        # templates, since both are deployed. Widening it on one side only
-        # produces a mismatch that reads like tampering.
-        CHECKSUM_PATHS="mdapi"
-        [ -d "$ARTIFACT_PATH/secret-templates" ] && CHECKSUM_PATHS="mdapi secret-templates"
-
-        # shellcheck disable=SC2086  # CHECKSUM_PATHS is a deliberate word list
-        ACTUAL=$(cd "$ARTIFACT_PATH" && find $CHECKSUM_PATHS -type f -print0 | sort -z \
-          | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+        # The same script sf-artifact-build wrote the digest with, resolved from
+        # the same tag, so the two cannot compute it differently. Widening the
+        # scope on one side only once produced a mismatch that read as tampering.
+        ACTUAL=$("$GITHUB_ACTION_PATH/../../scripts/artifact-checksum.sh" "$ARTIFACT_PATH")
 
         if [ "$ACTUAL" != "$WANT" ]; then
           echo "::error::Artifact checksum mismatch. Expected $WANT, got $ACTUAL. The artifact was modified after it was built; refusing to deploy." >&2
@@ -108,9 +100,6 @@ runs:
         echo "verified-sha256=$ACTUAL" >> "$GITHUB_OUTPUT"
         echo "✅ artifact checksum verified: $ACTUAL"
 
-    # ==========================================================================
-    # 2. Deploy or validate
-    # ==========================================================================
     - name: Deploy the artifact
       id: deploy
       shell: bash
@@ -121,8 +110,6 @@ runs:
         TEST_LEVEL: ${{ inputs.test-level }}
         TESTS: ${{ inputs.tests }}
         WAIT: ${{ inputs.wait }}
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
       run: |
         set -euo pipefail
 
@@ -160,14 +147,17 @@ runs:
         DEPLOY_RC=$?
         set -e
 
-        read_result() {
-          node -pe "
-            try { JSON.parse(require('fs').readFileSync('deploy-result.json','utf8')).result?.$1 ?? '' }
-            catch (e) { '' }"
-        }
-        DEPLOY_ID=$(read_result id)
-        STATUS=$(read_result status)
-        [ -n "$STATUS" ] || STATUS="Failed"
+        # One parse, one process. Reading the same file twice spent two node
+        # starts answering two questions about one document.
+        {
+          IFS= read -r DEPLOY_ID
+          IFS= read -r STATUS
+        } < <(node -e '
+          let r = {};
+          try { r = JSON.parse(require("fs").readFileSync("deploy-result.json", "utf8")); } catch {}
+          console.log(r.result?.id ?? r.data?.deployId ?? "");
+          console.log(r.result?.status ?? "Failed");
+        ')
 
         {
           echo "deploy-id=$DEPLOY_ID"

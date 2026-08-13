@@ -120,16 +120,16 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cd "$SOURCE_DIR"
 
-          # Non-secret per-environment values, consumed by the replacements
-          # block at convert time. Secrets never appear here.
+          # Fail here if the environment has no config, rather than 100 lines
+          # later inside a convert. The VALUES are exported by sf-artifact-build,
+          # which is the action that runs the replacement — see its
+          # env-config-file input.
           CONFIG="config/environments/$ENVIRONMENT.json"
           [ -f "$CONFIG" ] || { echo "::error::Missing $CONFIG"; exit 1; }
-          jq -r 'to_entries[] | "\(.key)=\(.value)"' "$CONFIG" >> "$GITHUB_ENV"
-          echo "Config: $(jq -r 'keys | join(", ")' "$CONFIG")"
 
           # deployed/<env> marks what this org last received. No tag means a
-          # first deployment, which needs everything.
-          git fetch --tags --force --quiet origin || true
+          # first deployment, which needs everything. checkout with
+          # fetch-depth: 0 already brought every tag, so no fetch is needed.
           BASE="0000000"
           if [ "$MODE" = "delta" ]; then
             if git rev-parse --verify --quiet "refs/tags/deployed/$ENVIRONMENT^{commit}" >/dev/null; then
@@ -144,7 +144,6 @@ jobs:
           {
             echo "mode=$MODE"
             echo "base=$BASE"
-            echo "nothing-to-do=false"
           } >> "$GITHUB_OUTPUT"
 
       - name: What changed
@@ -373,12 +372,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git config --global --add safe.directory '*'
-          git clone --bare --quiet \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" marker.git
-          cd marker.git
-          git tag -f "deployed/$ENVIRONMENT" "$GITHUB_SHA"
-          git push --force --quiet origin "refs/tags/deployed/$ENVIRONMENT"
+          REF="tags/deployed/$ENVIRONMENT"
+          # One API call. Cloning the repo — even bare — to give `git tag` an
+          # object to point at downloads the entire history for a ref update.
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/$REF" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/$REF" \
+              -f sha="$GITHUB_SHA" -F force=true --silent
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/$REF" -f sha="$GITHUB_SHA" --silent
+          fi
           echo "deployed/$ENVIRONMENT -> ${GITHUB_SHA:0:7}"
 
       - name: Summary

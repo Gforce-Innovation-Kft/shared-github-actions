@@ -62,28 +62,19 @@ runs:
         ORG_ALIAS: ${{ inputs.org-alias }}
         API_VERSION: ${{ inputs.api-version }}
         REQUIRED: ${{ inputs.required }}
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
       run: |
         set -euo pipefail
         umask 077
 
-        if [ ! -d "$TEMPLATE_DIR/customMetadata" ]; then
-          if [ "$REQUIRED" = "true" ]; then
-            echo "::error::No templates at '$TEMPLATE_DIR/customMetadata'. Credentials would silently never reach the org. If the deploy job has no checkout, the templates must travel inside the artifact — set secret-template-dir on sf-artifact-build. Pass required: false only if this repo genuinely has no secret-bearing metadata." >&2
-            echo "Directory listing of '$TEMPLATE_DIR':" >&2
-            ls -la "$TEMPLATE_DIR" 2>&1 | head -20 >&2 || echo "  (does not exist)" >&2
-            exit 1
-          fi
-          echo "No templates at '$TEMPLATE_DIR/customMetadata' — nothing to apply (required: false)."
-          echo "records-applied=0" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
+        # A missing directory and an empty one are the same failure — the
+        # credential does not reach the org — so there is one gate for both,
+        # after the loop, rather than a near-duplicate of it here.
 
         # Rendered files hold real credentials in plaintext for the duration of
-        # the deploy. The trap fires on success, failure and interrupt alike.
+        # the deploy. The trap fires on success, failure and interrupt alike,
+        # and reports if it somehow could not clean up.
         RENDER_DIR=$(mktemp -d)
-        trap 'rm -rf "$RENDER_DIR"' EXIT
+        trap 'rm -rf "$RENDER_DIR"; [ ! -d "$RENDER_DIR" ] || echo "::warning::rendered credentials survived at $RENDER_DIR"' EXIT
         mkdir -p "$RENDER_DIR/customMetadata"
 
         # Load non-secret per-environment values bundled with the artifact.
@@ -138,13 +129,29 @@ runs:
           COUNT=$((COUNT + 1))
         done
 
+        # The real invariant: the build bundled N templates, so the deploy must
+        # apply N. sf-artifact-build records that count in deployment.json, which
+        # turns "the credential silently never landed" from a no-op that reports
+        # success into a mismatch this action can name. Falls back to `required`
+        # when there is no manifest to compare against.
+        MANIFEST="$TEMPLATE_DIR/../deployment.json"
+        EXPECTED=""
+        [ -f "$MANIFEST" ] && EXPECTED=$(node -pe "
+          JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).secretTemplateCount ?? ''" 2>/dev/null || true)
+
+        if [ -n "$EXPECTED" ] && [ "$COUNT" != "$EXPECTED" ]; then
+          echo "::error::The artifact bundled $EXPECTED secret template(s) but $COUNT were found at '$TEMPLATE_DIR/customMetadata'. The credential would not reach the org." >&2
+          ls -la "$TEMPLATE_DIR" >&2 2>&1 || echo "  ('$TEMPLATE_DIR' does not exist)" >&2
+          exit 1
+        fi
+
         if [ "$COUNT" -eq 0 ]; then
-          if [ "$REQUIRED" = "true" ]; then
-            echo "::error::'$TEMPLATE_DIR/customMetadata' exists but holds no *.md-meta.xml.tpl files. Nothing would be applied and the credential would never reach the org." >&2
-            ls -la "$TEMPLATE_DIR/customMetadata" >&2 || true
+          if [ -z "$EXPECTED" ] && [ "$REQUIRED" = "true" ]; then
+            echo "::error::No *.md-meta.xml.tpl found under '$TEMPLATE_DIR/customMetadata', and no artifact manifest to check against. Credentials would silently never reach the org — if the deploy job has no checkout, the templates must travel inside the artifact (set secret-template-dir on sf-artifact-build)." >&2
+            ls -la "$TEMPLATE_DIR" >&2 2>&1 || echo "  ('$TEMPLATE_DIR' does not exist)" >&2
             exit 1
           fi
-          echo "No templates matched — nothing to apply (required: false)."
+          echo "No secret templates to apply."
           echo "records-applied=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -168,32 +175,25 @@ runs:
               --wait 10 \
               --json > "$RENDER_DIR/result.json"; then
           echo "::error::Failed to apply environment config to $ORG_ALIAS." >&2
-          # Surface the reason without echoing the rendered files, which hold
-          # the credentials this action exists to protect.
-          node -pe "
-            try {
-              const r = JSON.parse(require('fs').readFileSync('$RENDER_DIR/result.json','utf8'));
-              const f = r.result?.details?.componentFailures ?? [];
-              (Array.isArray(f) ? f : [f]).map(x => '  ' + x.fullName + ': ' + x.problem).join('\n')
-                || (r.message ?? '  (no detail in the response)')
-            } catch (e) { '  (could not parse the deploy result)' }" >&2
+          # Both levels, same as sf-artifact-deploy. A CLI-level rejection
+          # arrives as a top-level name/message with no componentFailures at
+          # all, so reporting only componentFailures turns a clear error into
+          # "(no detail)" — and this is the step where that hurts most, because
+          # the rendered files hold credentials and cannot be echoed.
+          node -e '
+            const fs = require("fs");
+            let r;
+            try { r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); }
+            catch { console.error("  (could not parse the deploy result)"); process.exit(0); }
+            if (r.name || r.message) console.error(`  ${r.name ?? "Error"}: ${r.message ?? ""}`);
+            for (const a of r.actions ?? []) console.error(`  hint: ${a}`);
+            const cf = r.result?.details?.componentFailures ?? [];
+            for (const f of (Array.isArray(cf) ? cf : [cf])) {
+              console.error(`  ${f.componentType ?? "?"} ${f.fullName ?? "?"}: ${f.problem ?? "?"}`);
+            }
+          ' "$RENDER_DIR/result.json" >&2
           exit 1
         fi
 
         echo "records-applied=$COUNT" >> "$GITHUB_OUTPUT"
         echo "✅ applied $COUNT custom metadata record(s) to $ORG_ALIAS"
-
-    # Belt and braces: the trap above removes the render dir, but a rendered
-    # credential surviving into a later step would be the worst failure this
-    # action could have.
-    - name: Confirm nothing rendered survived
-      if: always()
-      shell: bash
-      run: |
-        set -euo pipefail
-        LEFT=$(find "${TMPDIR:-/tmp}" -maxdepth 3 -name '*.md-meta.xml' -newermt '-15 minutes' 2>/dev/null | wc -l | tr -d ' ')
-        if [ "$LEFT" != "0" ]; then
-          echo "::warning::$LEFT rendered metadata file(s) may remain under ${TMPDIR:-/tmp}"
-        else
-          echo "No rendered credentials left on disk."
-        fi
