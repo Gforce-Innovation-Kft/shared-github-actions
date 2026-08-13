@@ -168,16 +168,62 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         if [ "$DEPLOY_RC" -ne 0 ] || [ "$STATUS" != "Succeeded" ]; then
-          echo "::error::Deployment $DEPLOY_ID finished with status '$STATUS'." >&2
-          # Component failures are the actionable part; surface them rather than
-          # making someone download the raw json from the run.
-          node -pe "
+          # The CLI reports failure at two different levels and only one of them
+          # is componentFailures. A CLI-level rejection — a bad manifest, a
+          # missing org, a malformed zip — arrives as a top-level name/message
+          # with no component detail at all. Reporting only componentFailures
+          # turns a perfectly clear error into "(no component detail)", which is
+          # exactly how a real diagnosis got lost once.
+          node -e '
+            const fs = require("fs");
+            let r;
             try {
-              const r = JSON.parse(require('fs').readFileSync('deploy-result.json','utf8'));
-              const f = r.result?.details?.componentFailures ?? [];
-              (Array.isArray(f) ? f : [f])
-                .map(x => \`  \${x.componentType} \${x.fullName}: \${x.problem}\`).join('\n') || '  (no component detail in the response)'
-            } catch (e) { '  (could not parse the deploy result)' }" >&2
+              r = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
+            } catch (e) {
+              const raw = (() => { try { return fs.readFileSync("deploy-result.json", "utf8"); } catch { return ""; } })();
+              console.error("::error::Could not parse the deploy result.");
+              console.error(raw.slice(0, 2000) || "  (empty response)");
+              process.exit(0);
+            }
+
+            const id = r.result?.id ?? r.data?.deployId ?? "";
+            const status = r.result?.status ?? r.status ?? "Failed";
+            console.error(`::error::Deployment ${id || "(no id)"} finished with status ${status}.`);
+
+            // Level 1 — the CLI error itself.
+            if (r.name || r.message) {
+              console.error(`\n${r.name ?? "Error"}: ${r.message ?? ""}`);
+            }
+            for (const a of r.actions ?? []) console.error(`  hint: ${a}`);
+
+            // Level 2 — per-component failures, when the deploy got that far.
+            const cf = r.result?.details?.componentFailures ?? [];
+            const failures = Array.isArray(cf) ? cf : [cf];
+            if (failures.length) {
+              console.error(`\n${failures.length} component failure(s):`);
+              for (const f of failures.slice(0, 25)) {
+                const where = f.lineNumber ? ` (line ${f.lineNumber})` : "";
+                console.error(`  ${f.componentType ?? "?"} ${f.fullName ?? "?"}${where}: ${f.problem ?? "?"}`);
+              }
+              if (failures.length > 25) console.error(`  … and ${failures.length - 25} more`);
+            }
+
+            // Level 3 — failed tests.
+            const tf = r.result?.details?.runTestResult?.failures ?? [];
+            const testFailures = Array.isArray(tf) ? tf : [tf];
+            if (testFailures.length) {
+              console.error(`\n${testFailures.length} test failure(s):`);
+              for (const t of testFailures.slice(0, 15)) {
+                console.error(`  ${t.name ?? "?"}.${t.methodName ?? "?"}: ${t.message ?? "?"}`);
+              }
+            }
+
+            // Nothing structured? Show the raw payload rather than nothing.
+            if (!r.name && !r.message && !failures.length && !testFailures.length) {
+              console.error("\nNo structured detail in the response. Raw payload:");
+              console.error(JSON.stringify(r, null, 2).slice(0, 2000));
+            }
+          ' >&2
           exit 1
         fi
 
