@@ -175,8 +175,10 @@ jobs:
           [ "$STATUS" = "built" ] || { echo "::error::status should be 'built', got '$STATUS'"; exit 1; }
 
           CLI=$(node -pe "JSON.parse(require('fs').readFileSync('$M','utf8')).toolVersions.salesforceCli")
-          [ -n "$CLI" ] && [ "$CLI" != "unknown" ] \
-            || { echo "::error::toolVersions.salesforceCli not resolved (got '$CLI')"; exit 1; }
+          if [ -z "$CLI" ] || [ "$CLI" = "unknown" ]; then
+            echo "::error::toolVersions.salesforceCli not resolved (got '$CLI')"
+            exit 1
+          fi
 
           [ "$COUNT" = "1" ] || { echo "::error::expected 1 component, got $COUNT"; exit 1; }
           case "$NAME" in
