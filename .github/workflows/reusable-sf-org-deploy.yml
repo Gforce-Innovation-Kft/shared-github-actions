@@ -210,15 +210,42 @@ jobs:
       # "we checked and it was fine".
       - name: Scan for secrets
         if: steps.gate.outputs.skip != 'true'
+        env:
+          ARTIFACT: ${{ inputs.source-dir }}/artifact
         run: |
           set -euo pipefail
+
           if ! command -v gitleaks >/dev/null 2>&1; then
             echo "::error::gitleaks is not in ${{ inputs.container-image }}. The artifact cannot be scanned, so it will not be uploaded. Use sf-ci 3.1.0 or later."
             exit 1
           fi
-          gitleaks dir "${{ inputs.source-dir }}/artifact" --no-banner --redact \
-            || { echo "::error::Secret found in the artifact. Not uploading. Secrets belong in config/secret-templates, applied after deployment."; exit 1; }
-          echo "No secrets detected."
+
+          # --redact keeps the value out of the log; the JSON report still
+          # carries rule, file and line. A gate that blocks without saying what
+          # it found is a gate people route around.
+          if gitleaks dir "$ARTIFACT" --no-banner --redact \
+               --report-format json --report-path /tmp/gitleaks.json; then
+            echo "No secrets detected in the artifact."
+            exit 0
+          fi
+
+          echo "::error::Secret detected in the deployment artifact. Not uploading."
+          node -e '
+            const fs = require("fs");
+            let f = [];
+            try { f = JSON.parse(fs.readFileSync("/tmp/gitleaks.json", "utf8")) ?? []; } catch {}
+            if (!f.length) { console.error("  (gitleaks wrote no report — rerun without --redact to inspect)"); }
+            for (const x of f) {
+              console.error(`  rule=${x.RuleID}  file=${x.File}  line=${x.StartLine}`);
+            }
+            console.error("");
+            console.error("A secret must never be baked into an artifact: the artifact is uploaded");
+            console.error("and retained, so the credential is retained with it. Move it to");
+            console.error("config/secret-templates/ — applied after deployment, never inside it.");
+            console.error("If this is a false positive, add a gitleaks allowlist entry rather than");
+            console.error("removing the gate.");
+          ' >&2
+          exit 1
 
       - uses: actions/upload-artifact@v4
         if: steps.gate.outputs.skip != 'true'
