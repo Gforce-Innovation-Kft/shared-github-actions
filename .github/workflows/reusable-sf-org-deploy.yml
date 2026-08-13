@@ -202,6 +202,10 @@ jobs:
           base-commit: ${{ steps.plan.outputs.base }}
           head-commit: ${{ github.sha }}
           retention-days: ${{ inputs.retention-days }}
+          # Bundled INTO the artifact: the deploy job has no checkout, so this
+          # is the only way it can reach them — and it means a rollback gets
+          # the templates that match the artifact it restores.
+          secret-template-dir: ${{ inputs.source-dir }}/${{ inputs.secret-template-dir }}
 
       # Keeps secrets out of a retained artifact. Absent tooling warns;
       # a detection always fails.
@@ -338,7 +342,8 @@ jobs:
         if: inputs.deploy-mode == 'deploy'
         uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-env-config-apply@v2
         with:
-          template-dir: ${{ inputs.secret-template-dir }}
+          # From the artifact, not from source — this job has no checkout.
+          template-dir: artifact/secret-templates
           org-alias: target
         env:
           GITHUB_APP_KEY_B64: ${{ secrets.github-app-key-b64 }}

@@ -21,10 +21,23 @@ author: "GForce Innovation"
 inputs:
   template-dir:
     description: |
-      Directory holding customMetadata/*.md-meta.xml.tpl. When it does not
-      exist the action is a no-op, so a repo with no secret-bearing config
-      needs no special casing.
+      Directory holding customMetadata/*.md-meta.xml.tpl. Normally
+      <artifact>/secret-templates, because the deploy job has no checkout and
+      the templates travel inside the artifact.
     required: true
+  required:
+    description: |
+      Whether finding no templates is an error.
+
+      Default true, and deliberately so. The first real deployment of this
+      pipeline pointed the action at a path that did not exist in the deploy
+      job, and it reported "nothing to apply" and passed — the credential
+      silently never landed, and only a query against the org revealed it.
+      "I found nothing to do" and "I did what was asked" must not look alike.
+
+      Set false only for a repo that genuinely has no secret-bearing metadata.
+    required: false
+    default: "true"
   org-alias:
     description: "Alias of an already-authenticated org"
     required: true
@@ -48,6 +61,7 @@ runs:
         TEMPLATE_DIR: ${{ inputs.template-dir }}
         ORG_ALIAS: ${{ inputs.org-alias }}
         API_VERSION: ${{ inputs.api-version }}
+        REQUIRED: ${{ inputs.required }}
         SF_AUTOUPDATE_DISABLE: "true"
         SF_DISABLE_TELEMETRY: "true"
       run: |
@@ -55,7 +69,13 @@ runs:
         umask 077
 
         if [ ! -d "$TEMPLATE_DIR/customMetadata" ]; then
-          echo "No templates in '$TEMPLATE_DIR/customMetadata' — nothing to apply."
+          if [ "$REQUIRED" = "true" ]; then
+            echo "::error::No templates at '$TEMPLATE_DIR/customMetadata'. Credentials would silently never reach the org. If the deploy job has no checkout, the templates must travel inside the artifact — set secret-template-dir on sf-artifact-build. Pass required: false only if this repo genuinely has no secret-bearing metadata." >&2
+            echo "Directory listing of '$TEMPLATE_DIR':" >&2
+            ls -la "$TEMPLATE_DIR" 2>&1 | head -20 >&2 || echo "  (does not exist)" >&2
+            exit 1
+          fi
+          echo "No templates at '$TEMPLATE_DIR/customMetadata' — nothing to apply (required: false)."
           echo "records-applied=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -89,7 +109,12 @@ runs:
         done
 
         if [ "$COUNT" -eq 0 ]; then
-          echo "No templates matched — nothing to apply."
+          if [ "$REQUIRED" = "true" ]; then
+            echo "::error::'$TEMPLATE_DIR/customMetadata' exists but holds no *.md-meta.xml.tpl files. Nothing would be applied and the credential would never reach the org." >&2
+            ls -la "$TEMPLATE_DIR/customMetadata" >&2 || true
+            exit 1
+          fi
+          echo "No templates matched — nothing to apply (required: false)."
           echo "records-applied=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
