@@ -1,18 +1,18 @@
 ---
 # ==============================================================================
-# Smoke test for sf-org-login.
+# sf-org-login — input contract tests.
 #
-# Composite actions have no unit-test harness, so the gate is a real run against
-# a real org. This asserts the action's OUTPUT CONTRACT, which is what every
-# downstream action depends on — not merely that the CLI exited zero.
+# Deliberately CREDENTIAL-FREE. Every case here is rejected by the action's
+# validation step before any network call, so this runs on every pull request
+# at zero cost and without putting a Salesforce private key in this repo.
 #
-# Three properties worth a test each:
-#   1. github-env credentials authenticate and the outputs are populated
-#   2. access-token is a real token, not the "[REDACTED]" placeholder that
-#      `sf org display` has returned since CLI 2.145
-#   3. no credential file survives the job
+# The real end-to-end login is tested where the credentials legitimately live:
+# `verify-org-login.yml` in sf-develop-demo, which consumes this action the way
+# a real caller does. Copying the JWT key here to test it twice would double
+# the rotation surface and prove nothing extra.
 #
-# Costs no scratch org and no package version — it only logs in.
+# Runs on ubuntu-latest rather than the sf-ci container: no case here reaches
+# a step that invokes `sf`, so pulling the image would only add latency.
 # ==============================================================================
 name: ci-sf-org-login-smoke
 
@@ -29,132 +29,137 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  github-env-source:
-    name: credential-source github-env
+  rejects-bad-input:
+    name: rejects ${{ matrix.case.name }}
     runs-on: ubuntu-latest
-    environment: integration
-    container:
-      image: gforceinnovation/sf-ci:1.7.0
-      options: --user 1001
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          # The most common JWT failure in CI. Passing My Domain instead of the
+          # login url normally surfaces ~60s later as a generic server-side JWT
+          # error; the action should name the actual mistake immediately.
+          - name: a My Domain instance-url
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://orgfarm-e65e3ad1e9-dev-ed.develop.my.salesforce.com
+
+          - name: a missing jwt-key-b64
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: ""
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
+          - name: a missing username
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: ""
+            instance-url: https://login.salesforce.com
+
+          - name: an unknown credential-source
+            auth-method: jwt
+            credential-source: azure-key-vault
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
+          - name: an unknown auth-method
+            auth-method: telepathy
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
     steps:
       - name: Check out the action under test
         uses: actions/checkout@v4
 
-      - name: Log in with environment credentials
-        id: login
+      - name: Attempt the login
+        id: attempt
+        continue-on-error: true
         uses: ./.github/actions/sf-org-login
         with:
-          auth-method: jwt
-          credential-source: github-env
-          jwt-key-b64: ${{ secrets.SF_JWT_KEY_B64 }}
-          client-id: ${{ vars.SF_CLIENT_ID }}
-          username: ${{ vars.SF_USERNAME }}
-          instance-url: ${{ vars.SF_INSTANCE_URL }}
-          org-alias: smoke
-          fetch-access-token: "true"
+          auth-method: ${{ matrix.case.auth-method }}
+          credential-source: ${{ matrix.case.credential-source }}
+          jwt-key-b64: ${{ matrix.case.jwt-key-b64 }}
+          client-id: ${{ matrix.case.client-id }}
+          username: ${{ matrix.case.username }}
+          instance-url: ${{ matrix.case.instance-url }}
+          org-alias: should-not-exist
 
-      - name: Assert the identity outputs are populated
-        env:
-          ORG_ID: ${{ steps.login.outputs.org-id }}
-          USERNAME: ${{ steps.login.outputs.username }}
-          INSTANCE_URL: ${{ steps.login.outputs.instance-url }}
+      - name: Assert it was rejected
         run: |
           set -euo pipefail
+          if [ "${{ steps.attempt.outcome }}" != "failure" ]; then
+            echo "::error::${{ matrix.case.name }} was accepted — validation is too permissive"
+            exit 1
+          fi
+          echo "✅ rejected: ${{ matrix.case.name }}"
 
-          [ -n "$ORG_ID" ]       || { echo "::error::org-id output was empty"; exit 1; }
-          [ -n "$USERNAME" ]     || { echo "::error::username output was empty"; exit 1; }
-          [ -n "$INSTANCE_URL" ] || { echo "::error::instance-url output was empty"; exit 1; }
-
-          case "$ORG_ID" in
-            00D*) ;;
-            *) echo "::error::org-id '$ORG_ID' is not a Salesforce org id"; exit 1 ;;
-          esac
-
-          # instance-url must be the org's My Domain, NOT the login url we
-          # passed in. Returning the login url would mean downstream API calls
-          # go to the wrong host.
-          case "$INSTANCE_URL" in
-            *login.salesforce.com*|*test.salesforce.com*)
-              echo "::error::instance-url is the login url, not the org's My Domain"; exit 1 ;;
-          esac
-
-          echo "✅ identity outputs valid — $USERNAME ($ORG_ID)"
-
-      # The regression that motivated this action's rewrite. Since CLI 2.145
-      # `sf org display` returns a ~54-char "[REDACTED]" string for accessToken.
-      # It LOOKS like a token, so a consumer gets an opaque 401 rather than an
-      # obvious failure. A real token is ~112 chars and starts with the org id.
-      - name: Assert access-token is real, not a redaction placeholder
-        env:
-          ACCESS_TOKEN: ${{ steps.login.outputs.access-token }}
-          ORG_ID: ${{ steps.login.outputs.org-id }}
-        run: |
-          set -euo pipefail
-
-          [ -n "$ACCESS_TOKEN" ] || { echo "::error::access-token was empty despite fetch-access-token: true"; exit 1; }
-
-          case "$ACCESS_TOKEN" in
-            *REDACTED*|*hidden*)
-              echo "::error::access-token is a redaction placeholder, not a token. The action is reading it from 'sf org display' again instead of 'sf org auth show-access-token'."
-              exit 1
-              ;;
-          esac
-
-          # A session id is <15-char org id prefix>!<signature>. Length alone is
-          # a weak check, so assert the structure too.
-          case "$ACCESS_TOKEN" in
-            "${ORG_ID:0:15}"'!'*) ;;
-            *) echo "::error::access-token is not shaped like a Salesforce session id"; exit 1 ;;
-          esac
-
-          echo "✅ access-token is a real session id (masked)"
-
-      - name: Assert no credential file survived
-        if: always()
-        run: |
-          set -euo pipefail
-          FOUND=0
-          for f in jwt-key.txt sfdx-auth-url.txt org-info.json token.json; do
-            if [ -f "$f" ]; then
-              echo "::error::$f was left on disk"
-              FOUND=1
-            fi
-          done
-          [ "$FOUND" -eq 0 ] || exit 1
-          echo "✅ no credential files left behind"
-
-  # A wrong instance-url is the most common JWT failure in CI. The action should
-  # name that specific mistake up front rather than let it surface 60 seconds
-  # later as a generic server-side JWT error.
-  rejects-my-domain-url:
-    name: rejects a My Domain instance-url
+  # A bad key must fail on the PEM check with an actionable message, not as an
+  # opaque server-side JWT error minutes later.
+  rejects-malformed-key:
+    name: rejects a non-PEM jwt key
     runs-on: ubuntu-latest
-    container:
-      image: gforceinnovation/sf-ci:1.7.0
-      options: --user 1001
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Attempt a login with a My Domain url
-        id: bad
+      - name: Attempt a login with base64 that is not a PEM key
+        id: attempt
         continue-on-error: true
         uses: ./.github/actions/sf-org-login
         with:
           auth-method: jwt
           credential-source: github-env
-          jwt-key-b64: bm90LWEta2V5
+          # base64("this is definitely not a private key")
+          jwt-key-b64: dGhpcyBpcyBkZWZpbml0ZWx5IG5vdCBhIHByaXZhdGUga2V5
           client-id: not-a-client-id
           username: someone@example.com
-          instance-url: https://orgfarm-e65e3ad1e9-dev-ed.develop.my.salesforce.com
+          instance-url: https://login.salesforce.com
           org-alias: should-not-exist
 
-      - name: Assert it was rejected at validation
+      - name: Assert it failed the PEM guard
         run: |
           set -euo pipefail
-          [ "${{ steps.bad.outcome }}" = "failure" ] \
-            || { echo "::error::a My Domain instance-url was accepted"; exit 1; }
-          echo "✅ My Domain url rejected before any network call"
+          [ "${{ steps.attempt.outcome }}" = "failure" ] \
+            || { echo "::error::a non-PEM key was accepted"; exit 1; }
+          echo "✅ non-PEM key rejected before contacting Salesforce"
+
+  auth-url-still-validated:
+    name: auth-url path unchanged
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Regression guard: adding credential-source must not have altered the
+      # historical auth-url branch, whose default is unrelated to JWT.
+      - name: Attempt auth-url with no url
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-org-login
+        with:
+          auth-method: auth-url
+          sfdx-auth-url: ""
+          org-alias: should-not-exist
+
+      - name: Assert it was rejected
+        run: |
+          set -euo pipefail
+          [ "${{ steps.attempt.outcome }}" = "failure" ] \
+            || { echo "::error::auth-url with an empty url was accepted"; exit 1; }
+          echo "✅ auth-url validation intact"
