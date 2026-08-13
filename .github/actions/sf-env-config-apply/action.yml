@@ -1,0 +1,144 @@
+name: "Salesforce Environment Config Apply"
+description: "Render secret-bearing Custom Metadata from templates and deploy it, after the artifact"
+author: "GForce Innovation"
+
+# ==============================================================================
+# Puts secrets in the org without ever putting them in the artifact.
+#
+# The deployment artifact is uploaded and retained, so anything baked into it at
+# convert time is retained too. Credentials therefore arrive by a second, much
+# smaller deployment that happens after the artifact lands.
+#
+# Custom Metadata records are metadata, not data — they cannot be upserted
+# through the Data API, they have to be deployed. So this renders
+# *.md-meta.xml.tpl with values from the environment, deploys only those files,
+# and shreds the rendered copies on every exit path.
+#
+# Runs after sf-artifact-deploy. Requires a prior sf-org-login.
+# Caller permissions: none.
+# ==============================================================================
+
+inputs:
+  template-dir:
+    description: |
+      Directory holding customMetadata/*.md-meta.xml.tpl. When it does not
+      exist the action is a no-op, so a repo with no secret-bearing config
+      needs no special casing.
+    required: true
+  org-alias:
+    description: "Alias of an already-authenticated org"
+    required: true
+  api-version:
+    description: "Metadata API version for the generated package.xml"
+    required: false
+    default: "65.0"
+
+outputs:
+  records-applied:
+    description: "Number of custom metadata records deployed"
+    value: ${{ steps.apply.outputs.records-applied }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Render and deploy
+      id: apply
+      shell: bash
+      env:
+        TEMPLATE_DIR: ${{ inputs.template-dir }}
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        API_VERSION: ${{ inputs.api-version }}
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
+      run: |
+        set -euo pipefail
+        umask 077
+
+        if [ ! -d "$TEMPLATE_DIR/customMetadata" ]; then
+          echo "No templates in '$TEMPLATE_DIR/customMetadata' — nothing to apply."
+          echo "records-applied=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Rendered files hold real credentials in plaintext for the duration of
+        # the deploy. The trap fires on success, failure and interrupt alike.
+        RENDER_DIR=$(mktemp -d)
+        trap 'rm -rf "$RENDER_DIR"' EXIT
+        mkdir -p "$RENDER_DIR/customMetadata"
+
+        COUNT=0
+        MEMBERS=""
+        for TPL in "$TEMPLATE_DIR"/customMetadata/*.md-meta.xml.tpl; do
+          [ -e "$TPL" ] || continue
+          BASE=$(basename "$TPL" .tpl)
+          TARGET="$RENDER_DIR/customMetadata/$BASE"
+
+          envsubst < "$TPL" > "$TARGET"
+
+          # An unresolved placeholder means a value was never wired up.
+          # Deploying a literal ${VAR} into an org is far worse than failing:
+          # the record looks populated and the integration fails at runtime.
+          if grep -q '\${' "$TARGET"; then
+            MISSING=$(grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$TARGET" | sort -u | tr '\n' ' ')
+            echo "::error::Unresolved placeholder(s) in $BASE: $MISSING — the environment does not provide them." >&2
+            exit 1
+          fi
+
+          MEMBERS="${MEMBERS}        <members>${BASE%.md-meta.xml}</members>"$'\n'
+          COUNT=$((COUNT + 1))
+        done
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "No templates matched — nothing to apply."
+          echo "records-applied=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        cat > "$RENDER_DIR/package.xml" <<XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Package xmlns="http://soap.sforce.com/2006/04/metadata">
+            <types>
+        ${MEMBERS}        <name>CustomMetadata</name>
+            </types>
+            <version>${API_VERSION}</version>
+        </Package>
+        XML
+
+        # NoTestRun: this deploys configuration records only, and the artifact
+        # deployment immediately before already ran the test policy.
+        if ! sf project deploy start \
+              --metadata-dir "$RENDER_DIR" \
+              --target-org "$ORG_ALIAS" \
+              --test-level NoTestRun \
+              --wait 10 \
+              --json > "$RENDER_DIR/result.json"; then
+          echo "::error::Failed to apply environment config to $ORG_ALIAS." >&2
+          # Surface the reason without echoing the rendered files, which hold
+          # the credentials this action exists to protect.
+          node -pe "
+            try {
+              const r = JSON.parse(require('fs').readFileSync('$RENDER_DIR/result.json','utf8'));
+              const f = r.result?.details?.componentFailures ?? [];
+              (Array.isArray(f) ? f : [f]).map(x => '  ' + x.fullName + ': ' + x.problem).join('\n')
+                || (r.message ?? '  (no detail in the response)')
+            } catch (e) { '  (could not parse the deploy result)' }" >&2
+          exit 1
+        fi
+
+        echo "records-applied=$COUNT" >> "$GITHUB_OUTPUT"
+        echo "✅ applied $COUNT custom metadata record(s) to $ORG_ALIAS"
+
+    # Belt and braces: the trap above removes the render dir, but a rendered
+    # credential surviving into a later step would be the worst failure this
+    # action could have.
+    - name: Confirm nothing rendered survived
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        LEFT=$(find "${TMPDIR:-/tmp}" -maxdepth 3 -name '*.md-meta.xml' -newermt '-15 minutes' 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$LEFT" != "0" ]; then
+          echo "::warning::$LEFT rendered metadata file(s) may remain under ${TMPDIR:-/tmp}"
+        else
+          echo "No rendered credentials left on disk."
+        fi

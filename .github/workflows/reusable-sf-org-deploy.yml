@@ -37,10 +37,16 @@ on:
         required: false
         type: string
         default: ""
-      container-image:
+      secret-template-dir:
+        description: "Templates for secret-bearing metadata, applied after the artifact"
         required: false
         type: string
-        default: "gforceinnovation/sf-ci:latest"
+        default: "config/secret-templates"
+      container-image:
+        description: "Exact tag, never latest — the image is the source of tool versions"
+        required: false
+        type: string
+        default: "gforceinnovation/sf-ci:3.1.0"
       retention-days:
         required: false
         type: number
@@ -48,6 +54,10 @@ on:
     secrets:
       sf-jwt-key-b64:
         required: true
+      github-app-key-b64:
+        required: false
+      owm-api-key:
+        required: false
     outputs:
       artifact-name:
         value: ${{ jobs.build.outputs.artifact-name }}
@@ -66,10 +76,8 @@ jobs:
     name: Build artifact
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    container:
-      image: ${{ inputs.container-image }}
-      # Drop this once sf-ci 3.1.0 ships — it defaults to 1001 itself.
-      options: --user 1001
+    # No `options:` needed — sf-ci 3.1.0+ defaults to the runner's UID.
+    container: ${{ inputs.container-image }}
     defaults:
       run:
         shell: bash
@@ -197,16 +205,19 @@ jobs:
 
       # Keeps secrets out of a retained artifact. Absent tooling warns;
       # a detection always fails.
+      # A hard gate as of sf-ci 3.1.0, which ships gitleaks. A missing scanner
+      # now fails rather than warns: "we could not check" must not read as
+      # "we checked and it was fine".
       - name: Scan for secrets
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           if ! command -v gitleaks >/dev/null 2>&1; then
-            echo "::warning::gitleaks not in this image — artifact NOT scanned."
-            exit 0
+            echo "::error::gitleaks is not in ${{ inputs.container-image }}. The artifact cannot be scanned, so it will not be uploaded. Use sf-ci 3.1.0 or later."
+            exit 1
           fi
           gitleaks dir "${{ inputs.source-dir }}/artifact" --no-banner --redact \
-            || { echo "::error::Secret found in the artifact. Not uploading."; exit 1; }
+            || { echo "::error::Secret found in the artifact. Not uploading. Secrets belong in config/secret-templates, applied after deployment."; exit 1; }
           echo "No secrets detected."
 
       - uses: actions/upload-artifact@v4
@@ -225,10 +236,8 @@ jobs:
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.login.outputs.instance-url }}
-    container:
-      image: ${{ inputs.container-image }}
-      # Drop this once sf-ci 3.1.0 ships — it defaults to 1001 itself.
-      options: --user 1001
+    # No `options:` needed — sf-ci 3.1.0+ defaults to the runner's UID.
+    container: ${{ inputs.container-image }}
     defaults:
       run:
         shell: bash
@@ -292,6 +301,20 @@ jobs:
           test-level: ${{ steps.policy.outputs.test-level }}
           # RunLocalTests ignores this; RunSpecifiedTests requires it.
           tests: ${{ needs.build.outputs.tests }}
+
+      # Secrets reach the org here — after the artifact, and never inside it.
+      # Skipped on validate: a check-only run commits nothing, so writing real
+      # credentials would be the one side effect "nothing is committed" must
+      # not have.
+      - name: Apply environment secrets
+        if: inputs.deploy-mode == 'deploy'
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-env-config-apply@v2
+        with:
+          template-dir: ${{ inputs.secret-template-dir }}
+          org-alias: target
+        env:
+          GITHUB_APP_KEY_B64: ${{ secrets.github-app-key-b64 }}
+          OWM_API_KEY: ${{ secrets.owm-api-key }}
 
       # Only after a real deploy. A validate run changed nothing, so moving the
       # marker would make the next delta skip components that never landed.
