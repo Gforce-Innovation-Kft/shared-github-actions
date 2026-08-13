@@ -86,6 +86,19 @@ runs:
         trap 'rm -rf "$RENDER_DIR"' EXIT
         mkdir -p "$RENDER_DIR/customMetadata"
 
+        # Load non-secret per-environment values bundled with the artifact.
+        # The deploy job has no checkout, so config/environments/<env>.json is
+        # unreachable from source — sf-artifact-build ships it in the artifact.
+        if [ -f "$TEMPLATE_DIR/env-config.json" ]; then
+          while IFS= read -r LINE; do
+            export "${LINE?}"
+          done < <(node -e '
+            const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            for (const [k, v] of Object.entries(cfg)) console.log(`${k}=${v}`);
+          ' "$TEMPLATE_DIR/env-config.json")
+          echo "Loaded environment config bundled with the artifact."
+        fi
+
         COUNT=0
         MEMBERS=""
         for TPL in "$TEMPLATE_DIR"/customMetadata/*.md-meta.xml.tpl; do
@@ -93,14 +106,31 @@ runs:
           BASE=$(basename "$TPL" .tpl)
           TARGET="$RENDER_DIR/customMetadata/$BASE"
 
+          # Check BEFORE rendering. envsubst substitutes an EMPTY STRING for an
+          # unset variable — it does not leave the placeholder behind — so a
+          # post-render scan for "${" cannot see the failure at all. That is
+          # how a record once deployed with the label "Github Gforce App ()".
+          MISSING=""
+          for VAR in $(grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$TPL" | tr -d '${}' | sort -u); do
+            if [ -z "${!VAR:-}" ]; then
+              MISSING="$MISSING $VAR"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::$BASE needs value(s) the environment does not provide:$MISSING" >&2
+            echo "  Secrets come from GitHub Environment secrets wired in the caller workflow." >&2
+            echo "  Non-secret values come from config/environments/<env>.json, bundled into the artifact." >&2
+            echo "  Rendering anyway would substitute an empty string and deploy a blank field." >&2
+            exit 1
+          fi
+
           envsubst < "$TPL" > "$TARGET"
 
-          # An unresolved placeholder means a value was never wired up.
-          # Deploying a literal ${VAR} into an org is far worse than failing:
-          # the record looks populated and the integration fails at runtime.
+          # Belt and braces: a literal ${VAR} surviving means envsubst skipped
+          # a form it does not handle.
           if grep -q '\${' "$TARGET"; then
-            MISSING=$(grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$TARGET" | sort -u | tr '\n' ' ')
-            echo "::error::Unresolved placeholder(s) in $BASE: $MISSING — the environment does not provide them." >&2
+            LEFT=$(grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$TARGET" | sort -u | tr '\n' ' ')
+            echo "::error::Placeholder(s) survived rendering in $BASE: $LEFT" >&2
             exit 1
           fi
 
