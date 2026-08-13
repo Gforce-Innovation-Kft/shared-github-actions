@@ -155,6 +155,18 @@ flowchart TB
     class B9,D2,GATE gate
 ```
 
+### Why only the deploy job is environment-scoped
+
+An environment with a required reviewer gates **every job that declares it**.
+When `build` also declared `environment:`, production asked for approval before
+the artifact existed — the reviewer saw no component list, no checksum, nothing
+to review. The gate now sits only on `deploy`, so by the time you are asked, the
+artifact is built and its contents are in the run summary.
+
+It has a second effect worth having: without an `environment:`, the build job
+cannot reach environment secrets at all. "The build job holds no credentials" is
+enforced by the workflow rather than merely true today.
+
 ### Why the deploy job has no checkout
 
 It is not an oversight. Without source it **cannot** rebuild what it deploys, so
