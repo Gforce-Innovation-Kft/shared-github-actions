@@ -90,7 +90,14 @@ runs:
         fi
         [ -n "$WANT" ] || { echo "::error::Could not determine the expected checksum." >&2; exit 1; }
 
-        ACTUAL=$(cd "$ARTIFACT_PATH" && find mdapi -type f -print0 | sort -z \
+        # Must match sf-artifact-build's scope exactly: metadata AND the secret
+        # templates, since both are deployed. Widening it on one side only
+        # produces a mismatch that reads like tampering.
+        CHECKSUM_PATHS="mdapi"
+        [ -d "$ARTIFACT_PATH/secret-templates" ] && CHECKSUM_PATHS="mdapi secret-templates"
+
+        # shellcheck disable=SC2086  # CHECKSUM_PATHS is a deliberate word list
+        ACTUAL=$(cd "$ARTIFACT_PATH" && find $CHECKSUM_PATHS -type f -print0 | sort -z \
           | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
 
         if [ "$ACTUAL" != "$WANT" ]; then
