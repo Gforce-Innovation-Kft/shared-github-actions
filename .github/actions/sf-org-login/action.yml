@@ -127,9 +127,6 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # ==========================================================================
-    # 1. Validate — fail before touching a cloud account or writing a key file
-    # ==========================================================================
     - name: Validate inputs
       shell: bash
       env:
@@ -164,6 +161,11 @@ runs:
                 [ -n "$JWT_KEY_B64_IN" ] || MISSING="$MISSING jwt-key-b64"
                 [ -n "$USERNAME_IN" ]    || MISSING="$MISSING username"
                 [ -n "$CLIENT_ID_IN" ]   || MISSING="$MISSING client-id"
+                # instance-url has a default, but an unset `vars.SF_INSTANCE_URL`
+                # passes an empty string, which SUPPRESSES that default. Without
+                # this check the failure surfaces at the later, vaguer guard
+                # instead of the one written to explain it.
+                [ -n "$INSTANCE_URL_IN" ] || MISSING="$MISSING instance-url"
                 if [ -n "$MISSING" ]; then
                   echo "::error::credential-source 'github-env' is missing:$MISSING" >&2
                   exit 1
@@ -189,15 +191,10 @@ runs:
             ;;
         esac
 
-    # ==========================================================================
-    # 2a. auth-url login
-    # ==========================================================================
     - name: Log in with an SFDX auth URL
       if: ${{ inputs.auth-method == 'auth-url' }}
       shell: bash
       env:
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
         SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
         ORG_ALIAS: ${{ inputs.org-alias }}
         SET_DEFAULT: ${{ inputs.set-default }}
@@ -267,8 +264,6 @@ runs:
       if: ${{ inputs.auth-method == 'jwt' }}
       shell: bash
       env:
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
         ORG_ALIAS: ${{ inputs.org-alias }}
         SET_DEFAULT: ${{ inputs.set-default }}
         SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
@@ -327,8 +322,6 @@ runs:
       id: identity
       shell: bash
       env:
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
         ORG_ALIAS: ${{ inputs.org-alias }}
       run: |
         set -euo pipefail
@@ -371,8 +364,6 @@ runs:
       if: ${{ inputs.fetch-access-token == 'true' }}
       shell: bash
       env:
-        SF_AUTOUPDATE_DISABLE: "true"
-        SF_DISABLE_TELEMETRY: "true"
         ORG_ALIAS: ${{ inputs.org-alias }}
       run: |
         set -euo pipefail
@@ -397,9 +388,6 @@ runs:
         echo "access-token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
         echo "✅ Access token acquired (masked)"
 
-    # ==========================================================================
-    # 5. Cleanup — always, including on failure
-    # ==========================================================================
     - name: Remove credential files
       if: always()
       shell: bash
