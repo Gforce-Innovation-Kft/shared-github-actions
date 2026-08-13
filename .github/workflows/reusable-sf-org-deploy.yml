@@ -75,7 +75,19 @@ jobs:
   build:
     name: Build artifact
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    # Deliberately NOT environment-scoped, for two reasons.
+    #
+    # Ordering: an environment with a required reviewer gates every job that
+    # declares it. With `environment:` here, production asked for approval
+    # BEFORE the artifact existed — the reviewer saw no component list, no
+    # checksum, nothing. Approving a deployment whose contents are unknown is
+    # not a review. The gate belongs on `deploy`, where there is something to
+    # review.
+    #
+    # Isolation: this job needs no secret. It reads
+    # config/environments/<env>.json, a committed file. Without an
+    # `environment:` it cannot reach environment secrets at all, so "the build
+    # job holds no credentials" is enforced rather than merely observed.
     # No `options:` needed — sf-ci 3.1.0+ defaults to the runner's UID.
     container: ${{ inputs.container-image }}
     defaults:
