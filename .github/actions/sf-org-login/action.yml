@@ -1,20 +1,43 @@
 name: "Salesforce Org Login"
-description: "Authenticate to a Salesforce org by SFDX auth URL or by JWT bearer flow (credentials from AWS Secrets Manager)"
+description: "Authenticate to a Salesforce org by SFDX auth URL or JWT bearer flow, with credentials from AWS Secrets Manager or GitHub Environment secrets"
 author: "GForce Innovation"
 
-# One login action, two credential sources. Both end in the same place — an
-# authenticated `sf` CLI under `org-alias` — so every downstream action can
-# depend on one contract instead of branching on how the job authenticated.
+# ==============================================================================
+# One login action. Two ways to authenticate, two places credentials come from.
+#
+#   auth-method       HOW we authenticate      auth-url | jwt
+#   credential-source WHERE credentials live   aws | github-env
+#
+# Every combination ends in the same place — an authenticated `sf` CLI under
+# `org-alias` — so downstream actions depend on one contract instead of
+# branching on how the job authenticated.
+#
+#   credential-source: aws         -> AWS Secrets Manager via OIDC role assumption
+#   credential-source: github-env  -> values passed in from GitHub Environment
+#                                     secrets and variables (no cloud account)
+#
+# `credential-source` exists so adding a source is additive. A future `gcp`
+# branch slots in beside these two without touching a single caller.
 #
 # Caller permissions:
-#   auth-method: auth-url  -> none beyond the job default
-#   auth-method: jwt       -> id-token: write (OIDC role assumption), contents: read
+#   auth-method: auth-url                          -> none beyond the job default
+#   auth-method: jwt + credential-source: aws      -> id-token: write, contents: read
+#   auth-method: jwt + credential-source: github-env -> none beyond the job default
+# ==============================================================================
 
 inputs:
+  # --- what to do ------------------------------------------------------------
   auth-method:
-    description: "How to authenticate: 'auth-url' (SFDX auth URL secret) or 'jwt' (bearer flow via AWS Secrets Manager)"
+    description: "How to authenticate: 'auth-url' (SFDX auth URL) or 'jwt' (bearer flow)"
     required: false
     default: "auth-url"
+  credential-source:
+    description: |
+      Where JWT credentials come from: 'aws' (Secrets Manager, the historical
+      default) or 'github-env' (passed in directly). Ignored when auth-method
+      is auth-url.
+    required: false
+    default: "aws"
 
   # --- auth-method: auth-url -------------------------------------------------
   sfdx-auth-url:
@@ -22,19 +45,46 @@ inputs:
     required: false
     default: ""
 
-  # --- auth-method: jwt ------------------------------------------------------
+  # --- credential-source: aws ------------------------------------------------
   aws-region:
-    description: "AWS region holding the credential secret (auth-method: jwt)"
+    description: "AWS region holding the credential secret"
     required: false
     default: "eu-central-1"
   secret-name:
-    description: "AWS Secrets Manager secret with JWT_KEY_B64 / USERNAME / CLIENT_ID / INSTANCE_URL (auth-method: jwt)"
+    description: "AWS Secrets Manager secret with JWT_KEY_B64 / USERNAME / CLIENT_ID / INSTANCE_URL"
     required: false
     default: "salesforce/gabor-devhub"
   aws-role-arn:
-    description: "IAM role to assume via OIDC. Required when auth-method is jwt."
+    description: "IAM role to assume via OIDC. Required when credential-source is aws."
     required: false
     default: ""
+
+  # --- credential-source: github-env -----------------------------------------
+  jwt-key-b64:
+    description: "Base64-encoded RSA private key. Always pass a secret, never a literal."
+    required: false
+    default: ""
+  username:
+    description: "Salesforce username of the integration user"
+    required: false
+    default: ""
+  client-id:
+    description: |
+      Connected App consumer key. Safe to pass as a repository/environment
+      VARIABLE rather than a secret — in the JWT bearer flow it is inert
+      without the private key, and keeping it readable makes a failed login
+      diagnosable instead of a wall of "***".
+    required: false
+    default: ""
+  instance-url:
+    description: |
+      The JWT audience — the LOGIN url, NOT the My Domain url.
+        https://login.salesforce.com   Developer Edition and production
+        https://test.salesforce.com    sandboxes
+      Passing a *.my.salesforce.com url here is the single most common cause
+      of a failing JWT login in CI.
+    required: false
+    default: "https://login.salesforce.com"
 
   # --- shared ----------------------------------------------------------------
   org-alias:
@@ -49,31 +99,48 @@ inputs:
     description: "Set this org as the default Dev Hub"
     required: false
     default: "false"
+  fetch-access-token:
+    description: |
+      Fetch a session access token as an output. Off by default: it costs an
+      extra CLI round-trip and almost every caller shells out to `sf` rather
+      than calling the REST API directly. Turn it on only if you need the token.
+    required: false
+    default: "false"
 
 outputs:
   org-id:
-    description: "The Salesforce org ID"
-    value: ${{ steps.display-org.outputs.org-id }}
+    description: "The Salesforce org ID (00D...)"
+    value: ${{ steps.identity.outputs.org-id }}
   username:
     description: "The authenticated username"
-    value: ${{ steps.display-org.outputs.username }}
+    value: ${{ steps.identity.outputs.username }}
   instance-url:
-    description: "The org instance URL"
-    value: ${{ steps.display-org.outputs.instance-url }}
+    description: "The org's My Domain instance URL — where the API lives, not the login url passed in"
+    value: ${{ steps.identity.outputs.instance-url }}
   access-token:
-    description: "Session access token, masked in the log. For actions that call the Salesforce APIs directly instead of shelling out to `sf`."
-    value: ${{ steps.display-org.outputs.access-token }}
+    description: |
+      Session access token, masked in the log. Empty unless fetch-access-token
+      is true. For actions that call the Salesforce APIs directly instead of
+      shelling out to `sf`.
+    value: ${{ steps.token.outputs.access-token }}
 
 runs:
   using: "composite"
   steps:
-    # Fail on a bad method before touching AWS or writing any credential file.
+    # ==========================================================================
+    # 1. Validate — fail before touching a cloud account or writing a key file
+    # ==========================================================================
     - name: Validate inputs
       shell: bash
       env:
         AUTH_METHOD: ${{ inputs.auth-method }}
+        CREDENTIAL_SOURCE: ${{ inputs.credential-source }}
         SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
         AWS_ROLE_ARN: ${{ inputs.aws-role-arn }}
+        JWT_KEY_B64_IN: ${{ inputs.jwt-key-b64 }}
+        USERNAME_IN: ${{ inputs.username }}
+        CLIENT_ID_IN: ${{ inputs.client-id }}
+        INSTANCE_URL_IN: ${{ inputs.instance-url }}
       run: |
         set -euo pipefail
 
@@ -85,10 +152,36 @@ runs:
             fi
             ;;
           jwt)
-            if [ -z "$AWS_ROLE_ARN" ]; then
-              echo "::error::auth-method 'jwt' needs aws-role-arn (the IAM role assumed via OIDC)." >&2
-              exit 1
-            fi
+            case "$CREDENTIAL_SOURCE" in
+              aws)
+                if [ -z "$AWS_ROLE_ARN" ]; then
+                  echo "::error::credential-source 'aws' needs aws-role-arn (the IAM role assumed via OIDC)." >&2
+                  exit 1
+                fi
+                ;;
+              github-env)
+                MISSING=""
+                [ -n "$JWT_KEY_B64_IN" ] || MISSING="$MISSING jwt-key-b64"
+                [ -n "$USERNAME_IN" ]    || MISSING="$MISSING username"
+                [ -n "$CLIENT_ID_IN" ]   || MISSING="$MISSING client-id"
+                if [ -n "$MISSING" ]; then
+                  echo "::error::credential-source 'github-env' is missing:$MISSING" >&2
+                  exit 1
+                fi
+                # Catch the My Domain mistake here, where the message can say
+                # what is wrong, rather than 60s later as a generic JWT failure.
+                case "$INSTANCE_URL_IN" in
+                  *.my.salesforce.com*)
+                    echo "::error::instance-url is '$INSTANCE_URL_IN', a My Domain URL. The JWT audience must be the LOGIN url: https://login.salesforce.com (DE/production) or https://test.salesforce.com (sandboxes)." >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *)
+                echo "::error::credential-source must be 'aws' or 'github-env', got '$CREDENTIAL_SOURCE'." >&2
+                exit 1
+                ;;
+            esac
             ;;
           *)
             echo "::error::auth-method must be 'auth-url' or 'jwt', got '$AUTH_METHOD'." >&2
@@ -96,11 +189,15 @@ runs:
             ;;
         esac
 
-    # --- auth-method: auth-url ------------------------------------------------
-    - name: Salesforce auth URL login
+    # ==========================================================================
+    # 2a. auth-url login
+    # ==========================================================================
+    - name: Log in with an SFDX auth URL
       if: ${{ inputs.auth-method == 'auth-url' }}
       shell: bash
       env:
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
         SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
         ORG_ALIAS: ${{ inputs.org-alias }}
         SET_DEFAULT: ${{ inputs.set-default }}
@@ -112,42 +209,81 @@ runs:
         printf '%s' "$SFDX_AUTH_URL" > sfdx-auth-url.txt
 
         EXTRA_ARGS=()
-        if [ "$SET_DEFAULT" = "true" ]; then
-          EXTRA_ARGS+=(--set-default)
-        fi
-        if [ "$SET_DEFAULT_DEV_HUB" = "true" ]; then
-          EXTRA_ARGS+=(--set-default-dev-hub)
-        fi
+        [ "$SET_DEFAULT" = "true" ] && EXTRA_ARGS+=(--set-default)
+        [ "$SET_DEFAULT_DEV_HUB" = "true" ] && EXTRA_ARGS+=(--set-default-dev-hub)
+
         sf org login sfdx-url \
           --sfdx-url-file sfdx-auth-url.txt \
           --alias "$ORG_ALIAS" \
           "${EXTRA_ARGS[@]}"
 
-    # --- auth-method: jwt -----------------------------------------------------
-    # Own-repo ref: composite actions cannot use relative paths, so this resolves
-    # at runtime against the released tag — see ADR 0002, decision 6.
-    - name: Get Salesforce credentials from AWS Secrets Manager
-      if: ${{ inputs.auth-method == 'jwt' }}
+    # ==========================================================================
+    # 2b. JWT — gather credentials from whichever source the caller chose.
+    #
+    # Both branches publish the SAME four env vars, so step 2c below is the one
+    # and only place that knows how to run `sf org login jwt`.
+    # ==========================================================================
+    - name: Fetch credentials from AWS Secrets Manager
+      if: ${{ inputs.auth-method == 'jwt' && inputs.credential-source == 'aws' }}
+      # Own-repo ref: composite actions cannot use relative paths, so this
+      # resolves at runtime against the released tag — see ADR 0002, decision 6.
       uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/aws-secret-get@v2
       with:
         aws-region: ${{ inputs.aws-region }}
         secret-name: ${{ inputs.secret-name }}
         aws-role-arn: ${{ inputs.aws-role-arn }}
 
-    - name: Salesforce JWT login
+    - name: Stage credentials from the GitHub environment
+      if: ${{ inputs.auth-method == 'jwt' && inputs.credential-source == 'github-env' }}
+      shell: bash
+      env:
+        JWT_KEY_B64_IN: ${{ inputs.jwt-key-b64 }}
+        USERNAME_IN: ${{ inputs.username }}
+        CLIENT_ID_IN: ${{ inputs.client-id }}
+        INSTANCE_URL_IN: ${{ inputs.instance-url }}
+      run: |
+        set -euo pipefail
+
+        # The private key is the credential — mask it before it can reach any
+        # later log line, regardless of whether the caller passed a secret.
+        echo "::add-mask::$JWT_KEY_B64_IN"
+
+        # The consumer key is deliberately NOT masked. In the JWT bearer flow
+        # it is inert without the private key, and masking it turns every
+        # diagnostic mentioning it into "***" — which is precisely the failure
+        # mode you need to read when a login breaks.
+
+        {
+          echo "JWT_KEY_B64=$JWT_KEY_B64_IN"
+          echo "USERNAME=$USERNAME_IN"
+          echo "CLIENT_ID=$CLIENT_ID_IN"
+          echo "INSTANCE_URL=$INSTANCE_URL_IN"
+        } >> "$GITHUB_ENV"
+
+    # ==========================================================================
+    # 2c. JWT login — shared by both credential sources
+    # ==========================================================================
+    - name: Log in with the JWT bearer flow
       if: ${{ inputs.auth-method == 'jwt' }}
       shell: bash
       env:
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
         ORG_ALIAS: ${{ inputs.org-alias }}
         SET_DEFAULT: ${{ inputs.set-default }}
         SET_DEFAULT_DEV_HUB: ${{ inputs.set-default-dev-hub }}
+        CREDENTIAL_SOURCE: ${{ inputs.credential-source }}
         SECRET_NAME: ${{ inputs.secret-name }}
       run: |
         set -euo pipefail
 
         for FIELD in JWT_KEY_B64 USERNAME CLIENT_ID INSTANCE_URL; do
           if [ -z "${!FIELD:-}" ]; then
-            echo "::error::Secret '$SECRET_NAME' exposed no $FIELD field. Expected fields: JWT_KEY_B64, USERNAME, CLIENT_ID, INSTANCE_URL." >&2
+            if [ "$CREDENTIAL_SOURCE" = "aws" ]; then
+              echo "::error::Secret '$SECRET_NAME' exposed no $FIELD field. Expected: JWT_KEY_B64, USERNAME, CLIENT_ID, INSTANCE_URL." >&2
+            else
+              echo "::error::$FIELD was not staged from the GitHub environment." >&2
+            fi
             exit 1
           fi
         done
@@ -160,13 +296,17 @@ runs:
         fi
         chmod 600 jwt-key.txt
 
+        # A truncated or wrongly-encoded key produces a confusing JWT error
+        # from the server; checking the PEM header names the real problem here.
+        if ! head -1 jwt-key.txt | grep -q "BEGIN.*PRIVATE KEY"; then
+          echo "::error::Decoded JWT key is not a PEM private key. Check the base64 is the full key and single-line (base64 -i server.key | tr -d '\\n')." >&2
+          exit 1
+        fi
+
         EXTRA_ARGS=()
-        if [ "$SET_DEFAULT" = "true" ]; then
-          EXTRA_ARGS+=(--set-default)
-        fi
-        if [ "$SET_DEFAULT_DEV_HUB" = "true" ]; then
-          EXTRA_ARGS+=(--set-default-dev-hub)
-        fi
+        [ "$SET_DEFAULT" = "true" ] && EXTRA_ARGS+=(--set-default)
+        [ "$SET_DEFAULT_DEV_HUB" = "true" ] && EXTRA_ARGS+=(--set-default-dev-hub)
+
         sf org login jwt \
           --username "$USERNAME" \
           --jwt-key-file jwt-key.txt \
@@ -175,18 +315,29 @@ runs:
           --alias "$ORG_ALIAS" \
           "${EXTRA_ARGS[@]}"
 
-    # --- shared ---------------------------------------------------------------
-    - name: Display org info
-      id: display-org
+    # ==========================================================================
+    # 3. Resolve org identity
+    #
+    # Deliberately does NOT read accessToken from here. Since CLI 2.145 the
+    # field is a ~54-char "[REDACTED]" placeholder rather than a token — it
+    # looks real, so a consumer that used it would get an opaque 401 instead of
+    # an obvious failure. The token has its own step below.
+    # ==========================================================================
+    - name: Resolve org identity
+      id: identity
       shell: bash
       env:
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
         ORG_ALIAS: ${{ inputs.org-alias }}
       run: |
         set -euo pipefail
         umask 077
+
         sf org display --target-org "$ORG_ALIAS" --json > org-info.json
 
-        # node instead of jq: node ships wherever the sf CLI runs (containers included)
+        # node rather than jq: node ships wherever the sf CLI runs, containers
+        # included, so this works on images that carry no jq.
         read_field() {
           node -pe "JSON.parse(require('fs').readFileSync('org-info.json','utf8')).result.$1 ?? ''"
         }
@@ -194,27 +345,63 @@ runs:
         ORG_ID=$(read_field id)
         USERNAME=$(read_field username)
         INSTANCE_URL=$(read_field instanceUrl)
-        ACCESS_TOKEN=$(read_field accessToken)
 
-        # Mask before the value can reach any later log line or output.
-        if [ -n "$ACCESS_TOKEN" ]; then
-          echo "::add-mask::$ACCESS_TOKEN"
+        if [ -z "$ORG_ID" ]; then
+          echo "::error::sf org display returned no org id for alias '$ORG_ALIAS'." >&2
+          exit 1
         fi
 
         {
           echo "org-id=$ORG_ID"
           echo "username=$USERNAME"
           echo "instance-url=$INSTANCE_URL"
-          echo "access-token=$ACCESS_TOKEN"
         } >> "$GITHUB_OUTPUT"
 
-        echo "✅ Successfully authenticated to Salesforce"
-        echo "   Org ID: $ORG_ID"
+        echo "✅ Authenticated to Salesforce"
+        echo "   Org ID:   $ORG_ID"
         echo "   Username: $USERNAME"
-        echo "   Alias: $ORG_ALIAS"
+        echo "   Instance: $INSTANCE_URL"
+        echo "   Alias:    $ORG_ALIAS"
 
-    - name: Cleanup
+    # ==========================================================================
+    # 4. Access token — opt-in, and from the command that actually returns one
+    # ==========================================================================
+    - name: Fetch an access token
+      id: token
+      if: ${{ inputs.fetch-access-token == 'true' }}
+      shell: bash
+      env:
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
+        ORG_ALIAS: ${{ inputs.org-alias }}
+      run: |
+        set -euo pipefail
+        umask 077
+
+        # `sf org auth show-access-token` is the sanctioned source. The CLI's
+        # own deprecation notice points here, and SF_TEMP_SHOW_SECRETS is
+        # documented as a temporary workaround due for removal.
+        sf org auth show-access-token --target-org "$ORG_ALIAS" --json > token.json
+
+        # Shape is { result: { accessToken: "..." } } — an object, not a bare
+        # string. Verified against CLI 2.145.6.
+        ACCESS_TOKEN=$(node -pe "JSON.parse(require('fs').readFileSync('token.json','utf8')).result?.accessToken ?? ''")
+
+        if [ -z "$ACCESS_TOKEN" ]; then
+          echo "::error::Could not obtain an access token for '$ORG_ALIAS'." >&2
+          exit 1
+        fi
+
+        # Mask before the value can reach any later log line or output.
+        echo "::add-mask::$ACCESS_TOKEN"
+        echo "access-token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+        echo "✅ Access token acquired (masked)"
+
+    # ==========================================================================
+    # 5. Cleanup — always, including on failure
+    # ==========================================================================
+    - name: Remove credential files
       if: always()
       shell: bash
       run: |
-        rm -f sfdx-auth-url.txt jwt-key.txt org-info.json
+        rm -f sfdx-auth-url.txt jwt-key.txt org-info.json token.json

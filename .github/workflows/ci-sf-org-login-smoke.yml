@@ -1,0 +1,165 @@
+---
+# ==============================================================================
+# sf-org-login — input contract tests.
+#
+# Deliberately CREDENTIAL-FREE. Every case here is rejected by the action's
+# validation step before any network call, so this runs on every pull request
+# at zero cost and without putting a Salesforce private key in this repo.
+#
+# The real end-to-end login is tested where the credentials legitimately live:
+# `verify-org-login.yml` in sf-develop-demo, which consumes this action the way
+# a real caller does. Copying the JWT key here to test it twice would double
+# the rotation surface and prove nothing extra.
+#
+# Runs on ubuntu-latest rather than the sf-ci container: no case here reaches
+# a step that invokes `sf`, so pulling the image would only add latency.
+# ==============================================================================
+name: ci-sf-org-login-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/actions/sf-org-login/**"
+      - ".github/workflows/ci-sf-org-login-smoke.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rejects-bad-input:
+    name: rejects ${{ matrix.case.name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          # The most common JWT failure in CI. Passing My Domain instead of the
+          # login url normally surfaces ~60s later as a generic server-side JWT
+          # error; the action should name the actual mistake immediately.
+          - name: a My Domain instance-url
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://orgfarm-e65e3ad1e9-dev-ed.develop.my.salesforce.com
+
+          - name: a missing jwt-key-b64
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: ""
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
+          - name: a missing username
+            auth-method: jwt
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: ""
+            instance-url: https://login.salesforce.com
+
+          - name: an unknown credential-source
+            auth-method: jwt
+            credential-source: azure-key-vault
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
+          - name: an unknown auth-method
+            auth-method: telepathy
+            credential-source: github-env
+            jwt-key-b64: bm90LWEta2V5
+            client-id: not-a-client-id
+            username: someone@example.com
+            instance-url: https://login.salesforce.com
+
+    steps:
+      - name: Check out the action under test
+        uses: actions/checkout@v4
+
+      - name: Attempt the login
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-org-login
+        with:
+          auth-method: ${{ matrix.case.auth-method }}
+          credential-source: ${{ matrix.case.credential-source }}
+          jwt-key-b64: ${{ matrix.case.jwt-key-b64 }}
+          client-id: ${{ matrix.case.client-id }}
+          username: ${{ matrix.case.username }}
+          instance-url: ${{ matrix.case.instance-url }}
+          org-alias: should-not-exist
+
+      - name: Assert it was rejected
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.attempt.outcome }}" != "failure" ]; then
+            echo "::error::${{ matrix.case.name }} was accepted — validation is too permissive"
+            exit 1
+          fi
+          echo "✅ rejected: ${{ matrix.case.name }}"
+
+  # A bad key must fail on the PEM check with an actionable message, not as an
+  # opaque server-side JWT error minutes later.
+  rejects-malformed-key:
+    name: rejects a non-PEM jwt key
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attempt a login with base64 that is not a PEM key
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-org-login
+        with:
+          auth-method: jwt
+          credential-source: github-env
+          # base64("this is definitely not a private key")
+          jwt-key-b64: dGhpcyBpcyBkZWZpbml0ZWx5IG5vdCBhIHByaXZhdGUga2V5
+          client-id: not-a-client-id
+          username: someone@example.com
+          instance-url: https://login.salesforce.com
+          org-alias: should-not-exist
+
+      - name: Assert it failed the PEM guard
+        run: |
+          set -euo pipefail
+          [ "${{ steps.attempt.outcome }}" = "failure" ] \
+            || { echo "::error::a non-PEM key was accepted"; exit 1; }
+          echo "✅ non-PEM key rejected before contacting Salesforce"
+
+  auth-url-still-validated:
+    name: auth-url path unchanged
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Regression guard: adding credential-source must not have altered the
+      # historical auth-url branch, whose default is unrelated to JWT.
+      - name: Attempt auth-url with no url
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-org-login
+        with:
+          auth-method: auth-url
+          sfdx-auth-url: ""
+          org-alias: should-not-exist
+
+      - name: Assert it was rejected
+        run: |
+          set -euo pipefail
+          [ "${{ steps.attempt.outcome }}" = "failure" ] \
+            || { echo "::error::auth-url with an empty url was accepted"; exit 1; }
+          echo "✅ auth-url validation intact"
