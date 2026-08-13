@@ -187,7 +187,10 @@ runs:
             }
 
             const id = r.result?.id ?? r.data?.deployId ?? "";
-            const status = r.result?.status ?? r.status ?? "Failed";
+            // r.status is the CLI exit code, not a deployment status — using it
+            // as a fallback printed "finished with status 1", which reads like
+            // a status name and is not one.
+            const status = r.result?.status ?? "Failed";
             console.error(`::error::Deployment ${id || "(no id)"} finished with status ${status}.`);
 
             // Level 1 — the CLI error itself.

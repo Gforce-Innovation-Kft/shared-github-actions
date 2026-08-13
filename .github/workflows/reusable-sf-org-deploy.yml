@@ -81,7 +81,7 @@ jobs:
       component-count: ${{ steps.build.outputs.component-count }}
       destructive-count: ${{ steps.build.outputs.destructive-count }}
       tests: ${{ steps.tests.outputs.tests }}
-      nothing-to-do: ${{ steps.plan.outputs.nothing-to-do }}
+      mode: ${{ steps.plan.outputs.mode }}
 
     steps:
       - uses: actions/checkout@v4
@@ -257,19 +257,29 @@ jobs:
           instance-url: ${{ vars.SF_INSTANCE_URL }}
           org-alias: target
 
+      # Salesforce requires 75% coverage on every Apex class in the deployment,
+      # so the test level has to match the deployment's scope:
+      #
+      #   full   RunLocalTests. RunSpecifiedTests would run only the tests the
+      #          delta selected, leaving every other class at 0% coverage and
+      #          failing with "Test coverage of selected Apex Class is 0%".
+      #   delta  RunSpecifiedTests when tests were selected — much cheaper than
+      #          running everything on an org carrying unrelated packages.
       - name: Pick the test level
         id: policy
         env:
           OVERRIDE: ${{ inputs.test-level }}
+          MODE: ${{ needs.build.outputs.mode }}
           TESTS: ${{ needs.build.outputs.tests }}
         run: |
           set -euo pipefail
-          if   [ -n "$OVERRIDE" ]; then LEVEL="$OVERRIDE"
-          elif [ -n "$TESTS" ];    then LEVEL="RunSpecifiedTests"
-          else                          LEVEL="RunLocalTests"
+          if   [ -n "$OVERRIDE" ];   then LEVEL="$OVERRIDE";          WHY="override"
+          elif [ "$MODE" = "full" ]; then LEVEL="RunLocalTests";      WHY="full deployment needs coverage for every class"
+          elif [ -n "$TESTS" ];      then LEVEL="RunSpecifiedTests";  WHY="delta selected tests"
+          else                            LEVEL="RunLocalTests";      WHY="delta selected no tests"
           fi
           echo "test-level=$LEVEL" >> "$GITHUB_OUTPUT"
-          echo "$LEVEL${TESTS:+ — $TESTS}"
+          echo "$LEVEL ($WHY)${TESTS:+ — $TESTS}"
 
       - name: ${{ inputs.deploy-mode == 'validate' && 'Validate' || 'Deploy' }} the artifact
         id: deploy
@@ -280,6 +290,7 @@ jobs:
           org-alias: target
           deploy-mode: ${{ inputs.deploy-mode }}
           test-level: ${{ steps.policy.outputs.test-level }}
+          # RunLocalTests ignores this; RunSpecifiedTests requires it.
           tests: ${{ needs.build.outputs.tests }}
 
       # Only after a real deploy. A validate run changed nothing, so moving the
