@@ -14,7 +14,7 @@
 # Runs on ubuntu-latest rather than the sf-ci container: no case here reaches
 # a step that invokes `sf`, so pulling the image would only add latency.
 # ==============================================================================
-name: ci-sf-org-login-smoke
+name: smoke-sf-org-login
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ on:
     branches: [main]
     paths:
       - ".github/actions/sf-org-login/**"
-      - ".github/workflows/ci-sf-org-login-smoke.yml"
+      - ".github/workflows/smoke-sf-org-login.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
