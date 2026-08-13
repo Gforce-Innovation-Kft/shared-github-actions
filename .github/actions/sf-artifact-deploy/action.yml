@@ -1,0 +1,222 @@
+name: "Salesforce Artifact Deploy"
+description: "Verify a frozen artifact's checksum, then deploy or validate it with --metadata-dir"
+author: "GForce Innovation"
+
+# ==============================================================================
+# The consuming half of the artifact boundary.
+#
+# This action deliberately has NO access to source. It takes a directory built
+# by sf-artifact-build and deploys exactly those bytes. The checksum check runs
+# before anything touches an org, so a tampered artifact costs no deployment
+# slot and cannot partially apply.
+#
+# deploy-mode: validate performs a check-only deployment — the org compiles and
+# runs the tests but nothing is committed. That is what lets the whole pipeline
+# be proven end to end without changing an org.
+#
+# Caller permissions: none. Requires a prior sf-org-login.
+# ==============================================================================
+
+inputs:
+  artifact-path:
+    description: "Directory produced by sf-artifact-build"
+    required: true
+  expected-sha256:
+    description: |
+      artifact-sha256 from sf-artifact-build. Leave empty to read it from the
+      artifact's own deployment.json — useful for rollback, where the caller
+      has a run id rather than a checksum.
+    required: false
+    default: ""
+  org-alias:
+    description: "Alias of an already-authenticated org"
+    required: true
+  deploy-mode:
+    description: |
+      'deploy' commits the change. 'validate' performs a check-only deployment:
+      the org compiles everything and runs the tests, but nothing is saved.
+    required: false
+    default: "deploy"
+  test-level:
+    description: "NoTestRun | RunSpecifiedTests | RunLocalTests | RunAllTestsInOrg"
+    required: false
+    default: "RunLocalTests"
+  tests:
+    description: "Space-separated test classes. Required when test-level is RunSpecifiedTests."
+    required: false
+    default: ""
+  wait:
+    description: "Minutes to wait for the deployment"
+    required: false
+    default: "30"
+
+outputs:
+  deploy-id:
+    description: "Salesforce deployment id (0Af...)"
+    value: ${{ steps.deploy.outputs.deploy-id }}
+  status:
+    description: "Succeeded | Failed"
+    value: ${{ steps.deploy.outputs.status }}
+  verified-sha256:
+    description: "The checksum that was verified before deploying"
+    value: ${{ steps.verify.outputs.verified-sha256 }}
+
+runs:
+  using: "composite"
+  steps:
+    # ==========================================================================
+    # 1. Verify — before anything touches an org
+    # ==========================================================================
+    - name: Verify the artifact checksum
+      id: verify
+      shell: bash
+      env:
+        ARTIFACT_PATH: ${{ inputs.artifact-path }}
+        EXPECTED: ${{ inputs.expected-sha256 }}
+      run: |
+        set -euo pipefail
+
+        [ -d "$ARTIFACT_PATH/mdapi" ] \
+          || { echo "::error::No mdapi/ directory in '$ARTIFACT_PATH' — is this an sf-artifact-build output?" >&2; exit 1; }
+
+        # Fall back to the artifact's own manifest so rollback callers can pass
+        # a run id instead of carrying a checksum around.
+        WANT="$EXPECTED"
+        if [ -z "$WANT" ]; then
+          [ -f "$ARTIFACT_PATH/deployment.json" ] \
+            || { echo "::error::No expected-sha256 given and no deployment.json to read it from." >&2; exit 1; }
+          WANT=$(node -pe "JSON.parse(require('fs').readFileSync('$ARTIFACT_PATH/deployment.json','utf8')).artifactSha256 ?? ''")
+          echo "Expected checksum read from the artifact's manifest."
+        fi
+        [ -n "$WANT" ] || { echo "::error::Could not determine the expected checksum." >&2; exit 1; }
+
+        ACTUAL=$(cd "$ARTIFACT_PATH" && find mdapi -type f -print0 | sort -z \
+          | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+
+        if [ "$ACTUAL" != "$WANT" ]; then
+          echo "::error::Artifact checksum mismatch. Expected $WANT, got $ACTUAL. The artifact was modified after it was built; refusing to deploy." >&2
+          exit 1
+        fi
+
+        echo "verified-sha256=$ACTUAL" >> "$GITHUB_OUTPUT"
+        echo "✅ artifact checksum verified: $ACTUAL"
+
+    # ==========================================================================
+    # 2. Deploy or validate
+    # ==========================================================================
+    - name: Deploy the artifact
+      id: deploy
+      shell: bash
+      env:
+        ARTIFACT_PATH: ${{ inputs.artifact-path }}
+        ORG_ALIAS: ${{ inputs.org-alias }}
+        DEPLOY_MODE: ${{ inputs.deploy-mode }}
+        TEST_LEVEL: ${{ inputs.test-level }}
+        TESTS: ${{ inputs.tests }}
+        WAIT: ${{ inputs.wait }}
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
+      run: |
+        set -euo pipefail
+
+        case "$DEPLOY_MODE" in
+          deploy)   SUBCOMMAND="start" ;;
+          validate) SUBCOMMAND="validate" ;;
+          *) echo "::error::deploy-mode must be 'deploy' or 'validate', got '$DEPLOY_MODE'." >&2; exit 1 ;;
+        esac
+
+        # A check-only deployment must actually run tests — NoTestRun makes it
+        # meaningless, and the server rejects it outright.
+        if [ "$DEPLOY_MODE" = "validate" ] && [ "$TEST_LEVEL" = "NoTestRun" ]; then
+          echo "::error::deploy-mode 'validate' cannot use test-level NoTestRun — a check-only deployment with no tests validates nothing." >&2
+          exit 1
+        fi
+
+        ARGS=(
+          --metadata-dir "$ARTIFACT_PATH/mdapi"
+          --target-org "$ORG_ALIAS"
+          --test-level "$TEST_LEVEL"
+          --wait "$WAIT"
+          --json
+        )
+        if [ "$TEST_LEVEL" = "RunSpecifiedTests" ]; then
+          [ -n "$TESTS" ] \
+            || { echo "::error::test-level RunSpecifiedTests needs a non-empty 'tests' input." >&2; exit 1; }
+          for T in $TESTS; do ARGS+=(--tests "$T"); done
+        fi
+
+        echo "Running: sf project deploy $SUBCOMMAND --metadata-dir ... --test-level $TEST_LEVEL"
+        [ "$DEPLOY_MODE" = "validate" ] && echo "::notice::Check-only deployment — nothing will be committed to $ORG_ALIAS."
+
+        set +e
+        sf project deploy "$SUBCOMMAND" "${ARGS[@]}" > deploy-result.json
+        DEPLOY_RC=$?
+        set -e
+
+        read_result() {
+          node -pe "
+            try { JSON.parse(require('fs').readFileSync('deploy-result.json','utf8')).result?.$1 ?? '' }
+            catch (e) { '' }"
+        }
+        DEPLOY_ID=$(read_result id)
+        STATUS=$(read_result status)
+        [ -n "$STATUS" ] || STATUS="Failed"
+
+        {
+          echo "deploy-id=$DEPLOY_ID"
+          echo "status=$STATUS"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$DEPLOY_RC" -ne 0 ] || [ "$STATUS" != "Succeeded" ]; then
+          echo "::error::Deployment $DEPLOY_ID finished with status '$STATUS'." >&2
+          # Component failures are the actionable part; surface them rather than
+          # making someone download the raw json from the run.
+          node -pe "
+            try {
+              const r = JSON.parse(require('fs').readFileSync('deploy-result.json','utf8'));
+              const f = r.result?.details?.componentFailures ?? [];
+              (Array.isArray(f) ? f : [f])
+                .map(x => \`  \${x.componentType} \${x.fullName}: \${x.problem}\`).join('\n') || '  (no component detail in the response)'
+            } catch (e) { '  (could not parse the deploy result)' }" >&2
+          exit 1
+        fi
+
+        echo "✅ ${DEPLOY_MODE} succeeded — $DEPLOY_ID"
+
+    # ==========================================================================
+    # 3. Finalise the audit record — on failure too, so a failed deployment is
+    #    recorded rather than leaving the manifest stuck at "built"
+    # ==========================================================================
+    - name: Finalise the deployment manifest
+      if: always()
+      shell: bash
+      env:
+        ARTIFACT_PATH: ${{ inputs.artifact-path }}
+        DEPLOY_ID: ${{ steps.deploy.outputs.deploy-id }}
+        STATUS: ${{ steps.deploy.outputs.status }}
+        DEPLOY_MODE: ${{ inputs.deploy-mode }}
+        TEST_LEVEL: ${{ inputs.test-level }}
+        TESTS: ${{ inputs.tests }}
+      run: |
+        set -euo pipefail
+        MANIFEST="$ARTIFACT_PATH/deployment.json"
+        [ -f "$MANIFEST" ] || exit 0
+
+        export MANIFEST
+        node -e '
+          const fs = require("fs");
+          const e = process.env;
+          const m = JSON.parse(fs.readFileSync(e.MANIFEST, "utf8"));
+          m.salesforceDeployId = e.DEPLOY_ID || null;
+          m.deployMode = e.DEPLOY_MODE;
+          m.testLevel = e.TEST_LEVEL;
+          m.testsRun = (e.TESTS || "").split(" ").filter(Boolean);
+          m.completedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+          // A validated artifact is not a deployed one; say which happened.
+          m.status = e.STATUS === "Succeeded"
+            ? (e.DEPLOY_MODE === "validate" ? "validated" : "success")
+            : "failed";
+          fs.writeFileSync(e.MANIFEST, JSON.stringify(m, null, 2));
+        '
+        rm -f deploy-result.json
+        echo "✅ manifest finalised: $(node -pe "JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).status")"

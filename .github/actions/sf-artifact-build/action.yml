@@ -1,0 +1,252 @@
+name: "Salesforce Artifact Build"
+description: "Convert source to metadata format with string replacements applied, then checksum and manifest it"
+author: "GForce Innovation"
+
+# ==============================================================================
+# THE ARTIFACT BOUNDARY.
+#
+# After this action returns, the contents of output-dir are immutable.
+# sf-artifact-deploy verifies the checksum before deploying and refuses on any
+# mismatch, which is what makes "the artifact deployed is the artifact stored"
+# an enforced property rather than a claim in a README.
+#
+# WHY AN EXPLICIT CONVERT INSTEAD OF DEPLOYING SOURCE DIRECTLY
+#
+# Salesforce string replacement fires when source format is converted to
+# metadata format. The SFDX docs state you cannot use replacements with
+# `project deploy start --metadata-dir`, and that replacements are honoured on
+# `sf project convert source` only when SF_APPLY_REPLACEMENTS_ON_CONVERT=true.
+#
+# So "deploy a stored zip" and "use replacements" are mutually exclusive unless
+# the convert is done explicitly with that variable set. Doing it here is what
+# lets the artifact be frozen before deployment while still carrying
+# environment-specific values.
+#
+#   https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_ws_string_replace.htm
+#
+# Caller permissions: none beyond the checkout.
+# ==============================================================================
+
+inputs:
+  manifest-path:
+    description: "package.xml describing what to convert, relative to source-dir"
+    required: true
+  source-dir:
+    description: "sfdx project root containing sfdx-project.json"
+    required: false
+    default: "."
+  mode:
+    description: "delta or full — recorded in the manifest and the artifact name"
+    required: true
+  environment:
+    description: "Target environment name, e.g. integration"
+    required: true
+  output-dir:
+    description: "Directory the artifact is written to, relative to source-dir"
+    required: false
+    default: "artifact"
+  destructive-manifest:
+    description: |
+      destructiveChanges.xml relative to source-dir, or empty when the delta has
+      no deletions. Without this a component deleted in git is never removed
+      from the org: the additive manifest simply stops mentioning it and the org
+      keeps it forever, while the run reports success.
+    required: false
+    default: ""
+  base-commit:
+    description: "Commit the delta was calculated from. 0000000 for full mode."
+    required: false
+    default: "0000000"
+  head-commit:
+    description: "Commit being deployed. Defaults to GITHUB_SHA."
+    required: false
+    default: ""
+  retention-days:
+    description: "Recorded in the manifest so the rollback window is auditable"
+    required: false
+    default: "90"
+
+outputs:
+  artifact-path:
+    description: "Directory holding the frozen artifact"
+    value: ${{ steps.build.outputs.artifact-path }}
+  artifact-name:
+    description: "Deterministic name — org-based-<env>-<mode>-<sha>-<run>"
+    value: ${{ steps.build.outputs.artifact-name }}
+  artifact-sha256:
+    description: "Checksum over every file in mdapi/, order-independent"
+    value: ${{ steps.build.outputs.artifact-sha256 }}
+  manifest-sha256:
+    description: |
+      Checksum of package.xml alone. Independent of environment-specific
+      replacements, so it is comparable across environments and answers
+      "did integration and production receive the same component set?".
+    value: ${{ steps.build.outputs.manifest-sha256 }}
+  component-count:
+    description: "Number of <members> in the additive manifest"
+    value: ${{ steps.build.outputs.component-count }}
+  destructive-count:
+    description: "Number of <members> in the destructive manifest"
+    value: ${{ steps.build.outputs.destructive-count }}
+
+runs:
+  using: "composite"
+  steps:
+    # Fail before spending a convert on inputs that cannot work.
+    - name: Validate inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        SOURCE_DIR: ${{ inputs.source-dir }}
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+      run: |
+        set -euo pipefail
+
+        case "$MODE" in
+          delta|full) ;;
+          *) echo "::error::mode must be 'delta' or 'full', got '$MODE'." >&2; exit 1 ;;
+        esac
+
+        [ -f "$SOURCE_DIR/sfdx-project.json" ] \
+          || { echo "::error::No sfdx-project.json in '$SOURCE_DIR'." >&2; exit 1; }
+        [ -f "$SOURCE_DIR/$MANIFEST_PATH" ] \
+          || { echo "::error::Manifest '$MANIFEST_PATH' not found under '$SOURCE_DIR'." >&2; exit 1; }
+
+    - name: Convert, checksum and manifest
+      id: build
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+        MODE: ${{ inputs.mode }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        DESTRUCTIVE_MANIFEST: ${{ inputs.destructive-manifest }}
+        BASE_COMMIT: ${{ inputs.base-commit }}
+        HEAD_COMMIT: ${{ inputs.head-commit }}
+        RETENTION_DAYS: ${{ inputs.retention-days }}
+        SF_AUTOUPDATE_DISABLE: "true"
+        SF_DISABLE_TELEMETRY: "true"
+      run: |
+        set -euo pipefail
+
+        STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        HEAD_SHA="${HEAD_COMMIT:-${GITHUB_SHA:-0000000}}"
+        SHORT_SHA="${HEAD_SHA:0:7}"
+        ARTIFACT_NAME="org-based-${ENVIRONMENT}-${MODE}-${SHORT_SHA}-${GITHUB_RUN_ID:-local}"
+
+        rm -rf "$OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR"
+
+        # ---- the whole point of this action -----------------------------------
+        # Without this variable the replacements block is silently ignored on
+        # convert and placeholders ship to the org.
+        export SF_APPLY_REPLACEMENTS_ON_CONVERT=true
+        sf project convert source \
+          --manifest "$MANIFEST_PATH" \
+          --output-dir "$OUTPUT_DIR/mdapi"
+
+        # convert emits its own package.xml; use ours so the artifact records
+        # exactly the manifest that was requested.
+        cp "$MANIFEST_PATH" "$OUTPUT_DIR/mdapi/package.xml"
+
+        # ---- deletions ---------------------------------------------------------
+        # `convert source` only ever emits the additive manifest. Post, not Pre,
+        # so deletions apply after additions: a component being replaced must
+        # still exist while its replacement deploys.
+        DESTRUCTIVE_COUNT=0
+        if [ -n "$DESTRUCTIVE_MANIFEST" ] && [ -f "$DESTRUCTIVE_MANIFEST" ]; then
+          if grep -q "<members>" "$DESTRUCTIVE_MANIFEST"; then
+            cp "$DESTRUCTIVE_MANIFEST" "$OUTPUT_DIR/mdapi/destructiveChangesPost.xml"
+            DESTRUCTIVE_COUNT=$(grep -c "<members>" "$DESTRUCTIVE_MANIFEST" || true)
+            echo "::notice::Artifact carries $DESTRUCTIVE_COUNT deletion(s)."
+          fi
+        fi
+
+        # ---- freeze ------------------------------------------------------------
+        # Order-independent: the same content yields the same digest regardless
+        # of filesystem traversal order.
+        ARTIFACT_SHA=$(cd "$OUTPUT_DIR" && find mdapi -type f -print0 | sort -z \
+          | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+        MANIFEST_SHA=$(sha256sum "$MANIFEST_PATH" | cut -d' ' -f1)
+        COMPONENT_COUNT=$(grep -c "<members>" "$MANIFEST_PATH" || true)
+
+        (cd "$OUTPUT_DIR" && find mdapi -type f -print0 | sort -z \
+          | xargs -0 sha256sum > checksums.txt)
+
+        # ---- toolchain provenance ---------------------------------------------
+        # Prefer the image's build-time manifest; derive live when absent so this
+        # action is not welded to one image version.
+        if [ -f /opt/sf-ci/versions.json ]; then
+          TOOL_VERSIONS=$(cat /opt/sf-ci/versions.json)
+          VERSION_SOURCE="image manifest"
+        else
+          SF_VER=$(sf version --json | sed -n 's/.*"cliVersion": *"@salesforce\/cli\/\([^"]*\)".*/\1/p')
+          SGD_VER=$(sf plugins --json 2>/dev/null \
+            | sed -n 's/.*"name": *"sfdx-git-delta"[^}]*"version": *"\([^"]*\)".*/\1/p' | head -1)
+          TOOL_VERSIONS=$(printf '{"salesforceCli":"%s","sfdxGitDelta":"%s","node":"%s"}' \
+            "${SF_VER:-unknown}" "${SGD_VER:-unknown}" "$(node --version | tr -d 'v')")
+          VERSION_SOURCE="derived at runtime"
+        fi
+        echo "Toolchain versions ($VERSION_SOURCE): $TOOL_VERSIONS"
+
+        export HEAD_SHA ARTIFACT_NAME ARTIFACT_SHA MANIFEST_SHA COMPONENT_COUNT \
+               DESTRUCTIVE_COUNT STARTED_AT TOOL_VERSIONS OUTPUT_DIR
+
+        node -e '
+          const fs = require("fs");
+          const e = process.env;
+          const manifest = {
+            schemaVersion: "1.0",
+            repository: e.GITHUB_REPOSITORY || null,
+            commit: e.HEAD_SHA,
+            baseCommit: e.BASE_COMMIT,
+            branch: e.GITHUB_REF_NAME || null,
+            tag: e.GITHUB_REF_TYPE === "tag" ? e.GITHUB_REF_NAME : null,
+            workflow: e.GITHUB_WORKFLOW || null,
+            runId: e.GITHUB_RUN_ID || null,
+            runUrl: e.GITHUB_RUN_ID
+              ? `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`
+              : null,
+            actor: e.GITHUB_ACTOR || null,
+            environment: e.ENVIRONMENT,
+            deploymentMode: e.MODE,
+            dockerImage: e.SF_CI_IMAGE || null,
+            toolVersions: JSON.parse(e.TOOL_VERSIONS),
+            componentCount: Number(e.COMPONENT_COUNT),
+            destructiveCount: Number(e.DESTRUCTIVE_COUNT),
+            artifactSha256: e.ARTIFACT_SHA,
+            manifestSha256: e.MANIFEST_SHA,
+            artifactName: e.ARTIFACT_NAME,
+            artifactRetentionDays: Number(e.RETENTION_DAYS),
+            salesforceDeployId: null,
+            testLevel: null,
+            testsRun: [],
+            startedAt: e.STARTED_AT,
+            completedAt: null,
+            status: "built",
+          };
+          fs.writeFileSync(`${e.OUTPUT_DIR}/deployment.json`, JSON.stringify(manifest, null, 2));
+        '
+
+        {
+          echo "artifact-path=$OUTPUT_DIR"
+          echo "artifact-name=$ARTIFACT_NAME"
+          echo "artifact-sha256=$ARTIFACT_SHA"
+          echo "manifest-sha256=$MANIFEST_SHA"
+          echo "component-count=$COMPONENT_COUNT"
+          echo "destructive-count=$DESTRUCTIVE_COUNT"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### Artifact frozen"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Name | \`$ARTIFACT_NAME\` |"
+          echo "| Mode | $MODE |"
+          echo "| Components | $COMPONENT_COUNT |"
+          echo "| Deletions | $DESTRUCTIVE_COUNT |"
+          echo "| Artifact sha256 | \`$ARTIFACT_SHA\` |"
+          echo "| Manifest sha256 | \`$MANIFEST_SHA\` |"
+        } >> "$GITHUB_STEP_SUMMARY"
