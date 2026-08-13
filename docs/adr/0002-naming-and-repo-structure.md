@@ -72,7 +72,7 @@ Everything else is the repository's own CI and takes no prefix.
 |---|---|---|
 | `ci.yml` | unchanged | internal |
 | `release.yml` | unchanged | internal |
-| `sf-ops-dispatch-smoke.yml` | `ci-sf-ops-dispatch-smoke.yml` | internal |
+| `sf-ops-dispatch-smoke.yml` | `smoke-sf-ops-dispatch.yml` | internal |
 | `salesforce-code-analyzer.yml` | `reusable-sf-code-analyze.yml` | reusable |
 | `sf-pr-validate.yml` | `reusable-sf-pr-validate.yml` | reusable |
 | `sf-release.yml` | `reusable-sf-release.yml` | reusable |
@@ -86,7 +86,7 @@ reader of another repository actually asks — *may I `uses:` this?* — at the 
 name. Marking internal workflows instead (`_ci.yml`) answers a question nobody outside the repo
 has.
 
-**Why `ci-sf-ops-dispatch-smoke.yml`.** Under this rule an unprefixed name means internal, but
+**Why `smoke-sf-ops-dispatch.yml`.** Under this rule an unprefixed name means internal, but
 `sf-ops-dispatch-smoke.yml` still reads as a Salesforce reusable workflow at a glance. The `ci-`
 prefix groups it with `ci.yml` and removes the ambiguity.
 
@@ -163,7 +163,7 @@ Absolute self-references are required.
 **Why `@develop` rather than `@v1` or `@v2`.** The refs must name the new directories, which do
 not exist at `v1`. `v1` stays frozen where it is, so existing consumers are unaffected and keep
 working against the old names. Pointing at `@develop` also fixes a real defect:
-`ci-sf-ops-dispatch-smoke.yml` currently exercises current dispatcher code against frozen `@v1`
+`smoke-sf-ops-dispatch.yml` currently exercises current dispatcher code against frozen `@v1`
 actions, so a change to an action is never smoke-tested before release.
 
 **Consequence.** Cutting a release becomes a two-step operation: rewrite the self-references from
@@ -183,7 +183,7 @@ commit. `release.yml` force-moves the floating `v2` tag, so the refs resolve as 
 release exists. `v1` stays frozen at the pre-rename layout for existing consumers.
 
 **The cost, stated plainly.** Pointing self-references at a tag reintroduces the defect this
-decision originally fixed: `ci-sf-ops-dispatch-smoke.yml` now exercises PR-head *dispatcher*
+decision originally fixed: `smoke-sf-ops-dispatch.yml` now exercises PR-head *dispatcher*
 code against `@v2` *action* code, so a change to a composite action is not covered by the
 dispatcher smoke test until a release is cut. What still covers PR-head code:
 

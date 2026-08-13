@@ -228,7 +228,7 @@ Three invariants this file exists to hold, all easy to break by accident:
 `quality` (format, lint, typecheck, bundle, test at the 95% gate, `dist:verify`) plus `smoke`,
 which drives the local actions with `./` refs and asserts their declared outputs.
 
-### `ci-sf-ops-dispatch-smoke.yml`
+### `smoke-sf-ops-dispatch.yml`
 
 Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion *is* a red run: a job calling a reusable workflow cannot take `continue-on-error`.
 

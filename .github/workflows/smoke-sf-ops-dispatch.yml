@@ -19,7 +19,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/reusable-sf-ops-dispatch.yml"
-      - ".github/workflows/ci-sf-ops-dispatch-smoke.yml"
+      - ".github/workflows/smoke-sf-ops-dispatch.yml"
       - ".github/actions/sf-ops-callback/**"
       - ".github/actions/sf-package-promote/**"
       - ".github/actions/sf-package-install/**"

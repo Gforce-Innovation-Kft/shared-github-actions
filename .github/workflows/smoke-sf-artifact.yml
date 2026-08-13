@@ -15,7 +15,7 @@
 #      while the run reports success
 #   5. a tampered artifact is refused before anything touches an org
 # ==============================================================================
-name: ci-sf-artifact-smoke
+name: smoke-sf-artifact
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ on:
     paths:
       - ".github/actions/sf-artifact-build/**"
       - ".github/actions/sf-artifact-deploy/**"
-      - ".github/workflows/ci-sf-artifact-smoke.yml"
+      - ".github/workflows/smoke-sf-artifact.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

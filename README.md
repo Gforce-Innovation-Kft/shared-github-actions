@@ -155,7 +155,7 @@ matches plus a reference scan of test classes in the source tree.
 ### Internal CI (not callable)
 
 Workflows without the `reusable-` prefix are this repo's own CI: `ci.yml`
-(quality + smoke), `ci-sf-ops-dispatch-smoke.yml` (routes all three dispatcher
+(quality + smoke), `smoke-sf-ops-dispatch.yml` (routes all three dispatcher
 operations with `dry-run: true`), `catalog-refresh.yml` (weekly consumer rescan,
 opens a PR on drift), and `release.yml` (tag → Release + floating major tag).
 
