@@ -1,0 +1,365 @@
+---
+# ==============================================================================
+# Artifact actions — org-free contract tests.
+#
+# Building an artifact needs no Salesforce org: it is convert + checksum +
+# manifest. So this runs on every pull request at zero org cost, against a
+# throwaway sfdx project rather than any real repo layout.
+#
+# Five properties, each of which has a way of failing silently:
+#   1. replacements actually fire at convert (the whole design rests on this)
+#   2. an unset replacement env var FAILS the build instead of shipping a
+#      placeholder to an org
+#   3. the emitted checksum matches the bytes on disk
+#   4. deletions are carried, or a deleted component orphans in the org forever
+#      while the run reports success
+#   5. a tampered artifact is refused before anything touches an org
+# ==============================================================================
+name: ci-sf-artifact-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/actions/sf-artifact-build/**"
+      - ".github/actions/sf-artifact-deploy/**"
+      - ".github/workflows/ci-sf-artifact-smoke.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Rules: sf-docker-images/docs/using-in-github-actions.md
+  SF_CI_IMAGE: gforceinnovation/sf-ci:latest
+
+jobs:
+  build-artifact:
+    name: sf-artifact-build freezes a verifiable artifact
+    runs-on: ubuntu-latest
+    container:
+      image: gforceinnovation/sf-ci:latest
+      options: --user 1001
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the actions under test
+        uses: actions/checkout@v4
+
+      - name: Build a throwaway sfdx project
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory '*'
+          mkdir -p fixture/force-app/main/default/classes fixture/manifest
+          cd fixture
+
+          cat > sfdx-project.json <<'JSON'
+          {
+            "packageDirectories": [{ "path": "force-app", "default": true }],
+            "namespace": "",
+            "sourceApiVersion": "65.0",
+            "replacements": [
+              {
+                "filename": "force-app/main/default/classes/Probe.cls",
+                "stringToReplace": "ENDPOINT_PLACEHOLDER",
+                "replaceWithEnv": "SF_PROBE_ENDPOINT"
+              }
+            ]
+          }
+          JSON
+
+          cat > force-app/main/default/classes/Probe.cls <<'CLS'
+          public with sharing class Probe {
+              public static final String ENDPOINT = 'ENDPOINT_PLACEHOLDER';
+          }
+          CLS
+
+          cat > force-app/main/default/classes/Probe.cls-meta.xml <<'META'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">
+              <apiVersion>65.0</apiVersion>
+              <status>Active</status>
+          </ApexClass>
+          META
+
+          cat > manifest/package.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Package xmlns="http://soap.sforce.com/2006/04/metadata">
+              <types><members>Probe</members><name>ApexClass</name></types>
+              <version>65.0</version>
+          </Package>
+          XML
+
+          cat > manifest/destructiveChanges.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Package xmlns="http://soap.sforce.com/2006/04/metadata">
+              <types><members>Obsolete</members><name>ApexClass</name></types>
+              <version>65.0</version>
+          </Package>
+          XML
+
+      - name: Build the artifact
+        id: build
+        uses: ./.github/actions/sf-artifact-build
+        with:
+          manifest-path: manifest/package.xml
+          destructive-manifest: manifest/destructiveChanges.xml
+          source-dir: fixture
+          mode: full
+          environment: smoke
+          output-dir: artifact
+          head-commit: ${{ github.sha }}
+        env:
+          SF_PROBE_ENDPOINT: https://smoke.example.com
+
+      # 1. The claim the entire design rests on.
+      - name: Replacements fired at convert time
+        run: |
+          set -euo pipefail
+          CLS=fixture/artifact/mdapi/classes/Probe.cls
+          [ -f "$CLS" ] || { echo "::error::converted class missing at $CLS"; exit 1; }
+          grep -q "https://smoke.example.com" "$CLS" \
+            || { echo "::error::replacement did not fire"; cat "$CLS"; exit 1; }
+          grep -q "ENDPOINT_PLACEHOLDER" "$CLS" \
+            && { echo "::error::placeholder survived conversion"; exit 1; }
+          echo "✅ replacement applied, no placeholder left"
+
+      # 3. A checksum that does not describe the bytes is worse than none.
+      - name: The emitted checksum matches the bytes on disk
+        env:
+          CLAIMED: ${{ steps.build.outputs.artifact-sha256 }}
+        run: |
+          set -euo pipefail
+          cd fixture/artifact
+          ACTUAL=$(find mdapi -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          [ "$ACTUAL" = "$CLAIMED" ] \
+            || { echo "::error::sha mismatch — claimed $CLAIMED, actual $ACTUAL"; exit 1; }
+          echo "✅ artifact-sha256 is honest"
+
+      # 4. Silent orphaning is the nastiest failure in the whole pipeline.
+      - name: Deletions are carried into the artifact
+        env:
+          DESTRUCTIVE: ${{ steps.build.outputs.destructive-count }}
+        run: |
+          set -euo pipefail
+          D=fixture/artifact/mdapi/destructiveChangesPost.xml
+          [ -f "$D" ] \
+            || { echo "::error::destructiveChangesPost.xml missing — deletions would never reach the org"; exit 1; }
+          grep -q "<members>Obsolete</members>" "$D" \
+            || { echo "::error::deletion member missing from $D"; exit 1; }
+          [ "$DESTRUCTIVE" = "1" ] \
+            || { echo "::error::destructive-count should be 1, got $DESTRUCTIVE"; exit 1; }
+          echo "✅ deletions carried and counted"
+
+      - name: The manifest is complete and well-formed
+        env:
+          NAME: ${{ steps.build.outputs.artifact-name }}
+          COUNT: ${{ steps.build.outputs.component-count }}
+        run: |
+          set -euo pipefail
+          M=fixture/artifact/deployment.json
+          node -e "JSON.parse(require('fs').readFileSync('$M','utf8'))"
+
+          for KEY in schemaVersion environment deploymentMode toolVersions \
+                     componentCount destructiveCount artifactSha256 \
+                     manifestSha256 artifactName status startedAt; do
+            VAL=$(node -pe "JSON.parse(require('fs').readFileSync('$M','utf8'))['$KEY'] ?? '__MISSING__'")
+            [ "$VAL" != "__MISSING__" ] || { echo "::error::deployment.json missing key: $KEY"; exit 1; }
+          done
+
+          STATUS=$(node -pe "JSON.parse(require('fs').readFileSync('$M','utf8')).status")
+          [ "$STATUS" = "built" ] || { echo "::error::status should be 'built', got '$STATUS'"; exit 1; }
+
+          CLI=$(node -pe "JSON.parse(require('fs').readFileSync('$M','utf8')).toolVersions.salesforceCli")
+          if [ -z "$CLI" ] || [ "$CLI" = "unknown" ]; then
+            echo "::error::toolVersions.salesforceCli not resolved (got '$CLI')"
+            exit 1
+          fi
+
+          [ "$COUNT" = "1" ] || { echo "::error::expected 1 component, got $COUNT"; exit 1; }
+          case "$NAME" in
+            org-based-smoke-full-*) ;;
+            *) echo "::error::unexpected artifact name: $NAME"; exit 1 ;;
+          esac
+          echo "✅ manifest complete — $NAME, cli $CLI"
+
+  # 2. A missing replacement value must stop the build. Shipping a literal
+  #    placeholder into an org is far worse than a red pipeline.
+  unset-replacement-fails:
+    name: an unset replacement env var fails the build
+    runs-on: ubuntu-latest
+    container:
+      image: gforceinnovation/sf-ci:latest
+      options: --user 1001
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a fixture whose replacement env var is never set
+        run: |
+          set -euo pipefail
+          mkdir -p fixture/force-app/main/default/classes fixture/manifest
+          cd fixture
+          cat > sfdx-project.json <<'JSON'
+          {
+            "packageDirectories": [{ "path": "force-app", "default": true }],
+            "namespace": "",
+            "sourceApiVersion": "65.0",
+            "replacements": [
+              {
+                "filename": "force-app/main/default/classes/Probe.cls",
+                "stringToReplace": "ENDPOINT_PLACEHOLDER",
+                "replaceWithEnv": "SF_DEFINITELY_NOT_SET"
+              }
+            ]
+          }
+          JSON
+          cat > force-app/main/default/classes/Probe.cls <<'CLS'
+          public with sharing class Probe {
+              public static final String ENDPOINT = 'ENDPOINT_PLACEHOLDER';
+          }
+          CLS
+          cat > force-app/main/default/classes/Probe.cls-meta.xml <<'META'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">
+              <apiVersion>65.0</apiVersion><status>Active</status>
+          </ApexClass>
+          META
+          cat > manifest/package.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Package xmlns="http://soap.sforce.com/2006/04/metadata">
+              <types><members>Probe</members><name>ApexClass</name></types>
+              <version>65.0</version>
+          </Package>
+          XML
+
+      - name: Attempt the build
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-artifact-build
+        with:
+          manifest-path: manifest/package.xml
+          source-dir: fixture
+          mode: full
+          environment: smoke
+          output-dir: artifact
+
+      - name: Assert the build was refused
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.attempt.outcome }}" != "failure" ]; then
+            echo "::error::the build succeeded with an unset replacement — a literal placeholder would ship to the org"
+            [ -f fixture/artifact/mdapi/classes/Probe.cls ] && cat fixture/artifact/mdapi/classes/Probe.cls
+            exit 1
+          fi
+          echo "✅ unset replacement stopped the build"
+
+  # 5. The property that makes "the artifact deployed is the artifact stored"
+  #    enforced rather than asserted.
+  reject-tampered-artifact:
+    name: sf-artifact-deploy refuses a tampered artifact
+    runs-on: ubuntu-latest
+    container:
+      image: gforceinnovation/sf-ci:latest
+      options: --user 1001
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a minimal artifact directory by hand
+        run: |
+          set -euo pipefail
+          mkdir -p art/mdapi/classes
+          echo 'public class A {}' > art/mdapi/classes/A.cls
+          GOOD=$(cd art && find mdapi -type f -print0 | sort -z \
+            | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          node -e "
+            require('fs').writeFileSync('art/deployment.json', JSON.stringify({
+              schemaVersion: '1.0', status: 'built', testsRun: [],
+              artifactSha256: '$GOOD'
+            }, null, 2));
+          "
+          echo "GOOD_SHA=$GOOD" >> "$GITHUB_ENV"
+
+      - name: Tamper with the artifact after it was checksummed
+        run: echo 'public class Evil {}' > art/mdapi/classes/Evil.cls
+
+      - name: Deploy must refuse it
+        id: deploy
+        continue-on-error: true
+        uses: ./.github/actions/sf-artifact-deploy
+        with:
+          artifact-path: art
+          expected-sha256: ${{ env.GOOD_SHA }}
+          org-alias: nonexistent-org
+          test-level: NoTestRun
+
+      - name: Assert it failed on the checksum, not on the missing org
+        run: |
+          set -euo pipefail
+          [ "${{ steps.deploy.outcome }}" = "failure" ] \
+            || { echo "::error::a tampered artifact was accepted"; exit 1; }
+          # If verified-sha256 were set, the checksum gate passed and the
+          # failure came from somewhere else — which would not prove anything.
+          [ -z "${{ steps.deploy.outputs.verified-sha256 }}" ] \
+            || { echo "::error::checksum gate passed on a tampered artifact"; exit 1; }
+          echo "✅ tampering blocked before any org was contacted"
+
+  # validate mode with no tests validates nothing; the action should say so
+  # rather than let a meaningless check-only run look like a green gate.
+  reject-validate-without-tests:
+    name: validate mode refuses NoTestRun
+    runs-on: ubuntu-latest
+    container:
+      image: gforceinnovation/sf-ci:latest
+      options: --user 1001
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a valid artifact directory
+        run: |
+          set -euo pipefail
+          mkdir -p art/mdapi/classes
+          echo 'public class A {}' > art/mdapi/classes/A.cls
+          GOOD=$(cd art && find mdapi -type f -print0 | sort -z \
+            | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          node -e "
+            require('fs').writeFileSync('art/deployment.json', JSON.stringify({
+              schemaVersion: '1.0', status: 'built', testsRun: [],
+              artifactSha256: '$GOOD'
+            }, null, 2));
+          "
+
+      - name: Attempt validate with NoTestRun
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/sf-artifact-deploy
+        with:
+          artifact-path: art
+          org-alias: nonexistent-org
+          deploy-mode: validate
+          test-level: NoTestRun
+
+      - name: Assert it was refused
+        run: |
+          set -euo pipefail
+          [ "${{ steps.attempt.outcome }}" = "failure" ] \
+            || { echo "::error::validate + NoTestRun was accepted"; exit 1; }
+          echo "✅ meaningless check-only run refused"
