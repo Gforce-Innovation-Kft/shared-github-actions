@@ -206,6 +206,9 @@ jobs:
           # is the only way it can reach them — and it means a rollback gets
           # the templates that match the artifact it restores.
           secret-template-dir: ${{ inputs.source-dir }}/${{ inputs.secret-template-dir }}
+          # Bundled too: templates mix secrets (from the deploy environment)
+          # with these non-secret values (from a file the deploy job cannot read).
+          env-config-file: ${{ inputs.source-dir }}/config/environments/${{ inputs.environment }}.json
 
       # Keeps secrets out of a retained artifact. Absent tooling warns;
       # a detection always fails.

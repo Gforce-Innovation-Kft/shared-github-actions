@@ -64,6 +64,17 @@ inputs:
       values, so the artifact stays secret-free.
     required: false
     default: ""
+  env-config-file:
+    description: |
+      Non-secret per-environment values (config/environments/<env>.json),
+      bundled beside the templates.
+
+      Templates mix secrets with these. The secrets come from the deploy job's
+      environment, but these live in a file that job cannot read without a
+      checkout — so without bundling them, envsubst silently substitutes empty
+      strings and deploys blank fields.
+    required: false
+    default: ""
   base-commit:
     description: "Commit the delta was calculated from. 0000000 for full mode."
     required: false
@@ -134,6 +145,7 @@ runs:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         DESTRUCTIVE_MANIFEST: ${{ inputs.destructive-manifest }}
         SECRET_TEMPLATE_DIR: ${{ inputs.secret-template-dir }}
+        ENV_CONFIG_FILE: ${{ inputs.env-config-file }}
         BASE_COMMIT: ${{ inputs.base-commit }}
         HEAD_COMMIT: ${{ inputs.head-commit }}
         RETENTION_DAYS: ${{ inputs.retention-days }}
@@ -183,6 +195,17 @@ runs:
         if [ -n "$SECRET_TEMPLATE_DIR" ] && [ -d "$SECRET_TEMPLATE_DIR" ]; then
           mkdir -p "$OUTPUT_DIR/secret-templates"
           cp -R "$SECRET_TEMPLATE_DIR"/. "$OUTPUT_DIR/secret-templates/"
+
+          # Templates mix secrets with non-secret per-environment values. The
+          # secrets come from the deploy job's environment; the non-secret ones
+          # live in a file the deploy job cannot read, because it has no
+          # checkout. Ship that file so both halves are available at render
+          # time — it is non-secret by definition, which is the whole point of
+          # keeping it separate from the secrets.
+          if [ -n "$ENV_CONFIG_FILE" ] && [ -f "$ENV_CONFIG_FILE" ]; then
+            cp "$ENV_CONFIG_FILE" "$OUTPUT_DIR/secret-templates/env-config.json"
+            echo "Bundled environment config: $(node -pe "Object.keys(JSON.parse(require('fs').readFileSync('$ENV_CONFIG_FILE','utf8'))).join(', ')")"
+          fi
           TEMPLATE_COUNT=$(find "$OUTPUT_DIR/secret-templates" -name '*.tpl' | wc -l | tr -d ' ')
           echo "Bundled $TEMPLATE_COUNT secret template(s) into the artifact."
 
