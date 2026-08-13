@@ -1,0 +1,403 @@
+---
+# ==============================================================================
+# The org-based deployment engine.
+#
+# Two jobs, and the job boundary IS the artifact boundary:
+#
+#   build    checkout -> delta -> convert (replacements) -> freeze -> upload
+#   deploy   download -> verify checksum -> deploy|validate -> mark
+#
+# The deploy job runs NO actions/checkout. It structurally cannot regenerate
+# the deployment source, which is what makes "build once, deploy the same
+# artifact" an enforced property rather than a documented intention.
+#
+# The delta base is the deployed/<env> git tag, force-moved only after a real
+# successful deploy. A failed deployment therefore leaves the base unchanged and
+# the next run recomputes an identical delta — which is what makes retries
+# idempotent. A validate run never moves it, because nothing was deployed.
+#
+# Container rules: sf-docker-images/docs/using-in-github-actions.md
+# ==============================================================================
+name: Salesforce Org Deploy (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment and Salesforce target, e.g. integration"
+        required: true
+        type: string
+      deploy-mode:
+        description: |
+          'deploy' commits the change and moves the deployed/<env> marker.
+          'validate' runs a check-only deployment: the org compiles everything
+          and runs the tests, nothing is saved, and the marker does not move.
+        required: false
+        type: string
+        default: "validate"
+      mode:
+        description: "delta (from deployed/<env>) or full (every package directory)"
+        required: false
+        type: string
+        default: "delta"
+      container-image:
+        required: false
+        type: string
+        default: "gforceinnovation/sf-ci:latest"
+      container-user:
+        description: "Must be 1001 on GitHub-hosted runners — see the container rules doc"
+        required: false
+        type: string
+        default: "1001"
+      source-dir:
+        required: false
+        type: string
+        default: "."
+      test-level:
+        description: "Overrides the automatic choice. Leave empty to let the pipeline decide."
+        required: false
+        type: string
+        default: ""
+      retention-days:
+        required: false
+        type: number
+        default: 90
+    secrets:
+      sf-jwt-key-b64:
+        required: true
+    outputs:
+      artifact-name:
+        value: ${{ jobs.build.outputs.artifact-name }}
+      artifact-sha256:
+        value: ${{ jobs.build.outputs.artifact-sha256 }}
+      component-count:
+        value: ${{ jobs.build.outputs.component-count }}
+      deploy-id:
+        value: ${{ jobs.deploy.outputs.deploy-id }}
+
+# One deployment per environment at a time. cancel-in-progress stays false:
+# cancelling mid-deploy leaves the org half-updated with no record of it.
+concurrency:
+  group: sf-org-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # BUILD — the only job that sees source
+  # ===========================================================================
+  build:
+    name: Build artifact for ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    container:
+      image: ${{ inputs.container-image }}
+      options: --user ${{ inputs.container-user }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.build.outputs.artifact-name }}
+      artifact-sha256: ${{ steps.build.outputs.artifact-sha256 }}
+      component-count: ${{ steps.build.outputs.component-count }}
+      destructive-count: ${{ steps.build.outputs.destructive-count }}
+      tests: ${{ steps.tests.outputs.tests }}
+      skipped: ${{ steps.gate.outputs.skip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Non-secret, committed, per-environment values consumed by the
+      # replacements block at convert time. Secrets never appear here.
+      - name: Load environment config
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        run: |
+          set -euo pipefail
+          CONFIG="$SOURCE_DIR/config/environments/$ENVIRONMENT.json"
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Missing $CONFIG. Every environment needs its non-secret replacement values committed."
+            exit 1
+          fi
+          export CONFIG
+          # shellcheck disable=SC2016  # ${...} below are JS template literals, not shell
+          node -e '
+            const fs = require("fs");
+            const cfg = JSON.parse(fs.readFileSync(process.env.CONFIG, "utf8"));
+            const lines = Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join("\n");
+            fs.appendFileSync(process.env.GITHUB_ENV, lines + "\n");
+            console.log(`loaded ${Object.keys(cfg).length} value(s): ${Object.keys(cfg).join(", ")}`);
+          '
+
+      # The first deploy to a new org has no deployed/<env> tag. Falling back to
+      # full is correct — an empty org needs everything anyway — but say so
+      # loudly, because a silent full deploy is a surprise.
+      - name: Resolve the delta base
+        id: base
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          TAG="deployed/$ENVIRONMENT"
+          EFFECTIVE_MODE="$MODE"
+          BASE="0000000"
+
+          if [ "$MODE" = "delta" ]; then
+            git fetch --tags --force --quiet origin || true
+            if git rev-parse --verify --quiet "refs/tags/$TAG^{commit}" >/dev/null; then
+              BASE=$(git rev-parse "refs/tags/$TAG^{commit}")
+              echo "Delta base: $TAG -> $BASE"
+            else
+              echo "::notice::No $TAG tag yet — first deployment to this org. Falling back to full mode."
+              EFFECTIVE_MODE="full"
+            fi
+          fi
+
+          {
+            echo "effective-mode=$EFFECTIVE_MODE"
+            echo "base-commit=$BASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Calculate the delta
+        id: delta
+        if: steps.base.outputs.effective-mode == 'delta'
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-source-delta@v2
+        with:
+          from-ref: ${{ steps.base.outputs.base-commit }}
+          to-ref: ${{ github.sha }}
+          source-dir: ${{ inputs.source-dir }}
+          output-dir: delta
+
+      - name: Generate a full manifest
+        if: steps.base.outputs.effective-mode == 'full'
+        env:
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SOURCE_DIR/delta/package"
+          cd "$SOURCE_DIR"
+          sf project generate manifest \
+            --source-dir . \
+            --output-dir delta/package \
+            --name package
+          echo "Full manifest: $(grep -c '<members>' delta/package/package.xml || echo 0) component(s)"
+
+      - name: Stop early when nothing changed
+        id: gate
+        env:
+          MODE: ${{ steps.base.outputs.effective-mode }}
+          HAS_CHANGES: ${{ steps.delta.outputs.has-changes }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "delta" ] && [ "$HAS_CHANGES" != "true" ]; then
+            echo "::notice::No deployable metadata changed since the last deployment. Nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select the Apex tests to run
+        id: tests
+        if: steps.gate.outputs.skip != 'true'
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-apex-test-select@v2
+        with:
+          package-xml: ${{ inputs.source-dir }}/delta/package/package.xml
+          source-dir: ${{ inputs.source-dir }}
+
+      - name: Build the artifact
+        id: build
+        if: steps.gate.outputs.skip != 'true'
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-artifact-build@v2
+        with:
+          manifest-path: delta/package/package.xml
+          # sfdx-git-delta writes this whether or not there are deletions; the
+          # action no-ops when it is absent or has no members. Only the delta
+          # path produces one — a full deploy deletes nothing.
+          destructive-manifest: ${{ steps.base.outputs.effective-mode == 'delta' && 'delta/destructiveChanges/destructiveChanges.xml' || '' }}
+          source-dir: ${{ inputs.source-dir }}
+          mode: ${{ steps.base.outputs.effective-mode }}
+          environment: ${{ inputs.environment }}
+          output-dir: artifact
+          base-commit: ${{ steps.base.outputs.base-commit }}
+          head-commit: ${{ github.sha }}
+          retention-days: ${{ inputs.retention-days }}
+
+      # The gate that keeps secrets out of a retained artifact. Runs before
+      # upload, never after. gitleaks is not in every image yet, so a missing
+      # binary warns rather than fails — but a DETECTION always fails.
+      - name: Scan the artifact for secrets
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ARTIFACT: ${{ inputs.source-dir }}/artifact
+        run: |
+          set -euo pipefail
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            echo "::warning::gitleaks is not in this image — the artifact was NOT scanned for secrets. Ship sf-ci with gitleaks to close this gate."
+            exit 0
+          fi
+          if gitleaks dir "$ARTIFACT" --no-banner --redact; then
+            echo "✅ no secrets detected in the artifact"
+          else
+            echo "::error::gitleaks found a secret in the deployment artifact. Not uploading. Secrets belong in a post-deploy step, never in the artifact."
+            exit 1
+          fi
+
+      - name: Upload the artifact
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact-name }}
+          path: ${{ inputs.source-dir }}/artifact
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+
+  # ===========================================================================
+  # DEPLOY — no checkout, by design
+  # ===========================================================================
+  deploy:
+    name: ${{ inputs.deploy-mode == 'validate' && 'Validate against' || 'Deploy to' }} ${{ inputs.environment }}
+    needs: build
+    if: needs.build.outputs.skipped != 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.login.outputs.instance-url }}
+    container:
+      image: ${{ inputs.container-image }}
+      options: --user ${{ inputs.container-user }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: write # only to move the deployed/<env> marker
+    outputs:
+      deploy-id: ${{ steps.deploy.outputs.deploy-id }}
+    steps:
+      # NOTE: deliberately no actions/checkout. This job must not be able to
+      # regenerate the deployment source. Everything it deploys arrives as the
+      # artifact built above; the marker move below uses a bare clone.
+      - name: Download the artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: artifact
+
+      - name: Authenticate
+        id: login
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-org-login@v2
+        with:
+          auth-method: jwt
+          credential-source: github-env
+          jwt-key-b64: ${{ secrets.sf-jwt-key-b64 }}
+          username: ${{ vars.SF_USERNAME }}
+          client-id: ${{ vars.SF_CLIENT_ID }}
+          instance-url: ${{ vars.SF_INSTANCE_URL }}
+          org-alias: target
+
+      - name: Choose the test level
+        id: policy
+        env:
+          OVERRIDE: ${{ inputs.test-level }}
+          TESTS: ${{ needs.build.outputs.tests }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OVERRIDE" ]; then
+            LEVEL="$OVERRIDE"
+          elif [ -n "$TESTS" ]; then
+            # Run only what the change touches — far cheaper than RunLocalTests
+            # on an org that carries unrelated packages.
+            LEVEL="RunSpecifiedTests"
+          else
+            LEVEL="RunLocalTests"
+          fi
+          echo "test-level=$LEVEL" >> "$GITHUB_OUTPUT"
+          echo "Test level: $LEVEL${TESTS:+ ($TESTS)}"
+
+      - name: ${{ inputs.deploy-mode == 'validate' && 'Validate' || 'Deploy' }} the artifact
+        id: deploy
+        uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/sf-artifact-deploy@v2
+        with:
+          artifact-path: artifact
+          expected-sha256: ${{ needs.build.outputs.artifact-sha256 }}
+          org-alias: target
+          deploy-mode: ${{ inputs.deploy-mode }}
+          test-level: ${{ steps.policy.outputs.test-level }}
+          tests: ${{ needs.build.outputs.tests }}
+
+      # TODO(sf-env-config-apply): secret-bearing Custom Metadata is applied
+      # here on a real deploy. Deferred until the first real deployment, because
+      # it cannot be exercised — or trusted — by a validate-only run.
+
+      # Only after a REAL successful deploy. A validate run changed nothing, so
+      # moving the marker would make the next delta skip components that were
+      # never actually deployed.
+      - name: Move the deployment marker
+        if: inputs.deploy-mode == 'deploy'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="deployed/$ENVIRONMENT"
+          git config --global --add safe.directory '*'
+          git clone --bare --quiet \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" marker.git
+          cd marker.git
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push --force --quiet origin "refs/tags/$TAG"
+          echo "✅ $TAG now points at $GITHUB_SHA"
+
+      - name: Explain why the marker did not move
+        if: inputs.deploy-mode != 'deploy'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          echo "::notice::Validate-only run — deployed/$ENVIRONMENT deliberately not moved, because nothing was deployed."
+
+      - name: Publish the summary
+        if: always()
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOY_MODE: ${{ inputs.deploy-mode }}
+          ARTIFACT: ${{ needs.build.outputs.artifact-name }}
+          SHA256: ${{ needs.build.outputs.artifact-sha256 }}
+          COMPONENTS: ${{ needs.build.outputs.component-count }}
+          DELETIONS: ${{ needs.build.outputs.destructive-count }}
+          TEST_LEVEL: ${{ steps.policy.outputs.test-level }}
+          TESTS: ${{ needs.build.outputs.tests }}
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy-id }}
+          INSTANCE_URL: ${{ steps.login.outputs.instance-url }}
+        run: |
+          set -euo pipefail
+          {
+            if [ "$DEPLOY_MODE" = "validate" ]; then
+              echo "# Salesforce validation — $ENVIRONMENT"
+              echo ""
+              echo "> Check-only. The org compiled and tested this artifact; nothing was committed."
+            else
+              echo "# Salesforce deployment — $ENVIRONMENT"
+            fi
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo "| Actor | @$GITHUB_ACTOR |"
+            echo "| Artifact | \`$ARTIFACT\` |"
+            echo "| Artifact sha256 | \`${SHA256:0:16}…\` |"
+            echo "| Components | ${COMPONENTS:-0} |"
+            echo "| Deletions | ${DELETIONS:-0} |"
+            echo "| Test level | ${TEST_LEVEL:-n/a} |"
+            echo "| Tests | ${TESTS:-—} |"
+            echo "| Salesforce id | \`${DEPLOY_ID:-n/a}\` |"
+            echo "| Org | ${INSTANCE_URL:-n/a} |"
+            echo "| Result | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
