@@ -53,6 +53,17 @@ inputs:
       keeps it forever, while the run reports success.
     required: false
     default: ""
+  secret-template-dir:
+    description: |
+      Templates for secret-bearing metadata, copied INTO the artifact.
+
+      They belong in the artifact because the deploy job has no checkout — it
+      has no source to read them from — and because the templates that ship
+      with an artifact are by definition the ones that match it, so a rollback
+      gets the right pair. They contain ${PLACEHOLDER} markers only, never
+      values, so the artifact stays secret-free.
+    required: false
+    default: ""
   base-commit:
     description: "Commit the delta was calculated from. 0000000 for full mode."
     required: false
@@ -122,6 +133,7 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         DESTRUCTIVE_MANIFEST: ${{ inputs.destructive-manifest }}
+        SECRET_TEMPLATE_DIR: ${{ inputs.secret-template-dir }}
         BASE_COMMIT: ${{ inputs.base-commit }}
         HEAD_COMMIT: ${{ inputs.head-commit }}
         RETENTION_DAYS: ${{ inputs.retention-days }}
@@ -163,15 +175,46 @@ runs:
           fi
         fi
 
+        # ---- secret templates --------------------------------------------------
+        # Copied into the artifact so the deploy job can reach them without a
+        # checkout. Placeholder markers only — asserted, not assumed, because a
+        # rendered value slipping in here would be retained with the artifact.
+        TEMPLATE_COUNT=0
+        if [ -n "$SECRET_TEMPLATE_DIR" ] && [ -d "$SECRET_TEMPLATE_DIR" ]; then
+          mkdir -p "$OUTPUT_DIR/secret-templates"
+          cp -R "$SECRET_TEMPLATE_DIR"/. "$OUTPUT_DIR/secret-templates/"
+          TEMPLATE_COUNT=$(find "$OUTPUT_DIR/secret-templates" -name '*.tpl' | wc -l | tr -d ' ')
+          echo "Bundled $TEMPLATE_COUNT secret template(s) into the artifact."
+
+          # A .tpl with no ${...} left in it has already been rendered, which
+          # means a real value is about to be frozen into the artifact.
+          for T in $(find "$OUTPUT_DIR/secret-templates" -name '*.tpl'); do
+            if ! grep -q '\${' "$T"; then
+              echo "::error::$T contains no \${PLACEHOLDER} — it looks pre-rendered. A template with real values must never enter the artifact." >&2
+              exit 1
+            fi
+          done
+        fi
+
         # ---- freeze ------------------------------------------------------------
         # Order-independent: the same content yields the same digest regardless
         # of filesystem traversal order.
-        ARTIFACT_SHA=$(cd "$OUTPUT_DIR" && find mdapi -type f -print0 | sort -z \
+        # Everything that reaches the org is covered: the metadata AND the
+        # templates, since the templates are rendered and deployed too. Leaving
+        # them out would be a hole in "the artifact deployed is the artifact
+        # stored". deployment.json and checksums.txt are excluded because they
+        # describe the checksum rather than contribute to it.
+        CHECKSUM_PATHS="mdapi"
+        [ -d "$OUTPUT_DIR/secret-templates" ] && CHECKSUM_PATHS="mdapi secret-templates"
+
+        # shellcheck disable=SC2086  # CHECKSUM_PATHS is a deliberate word list
+        ARTIFACT_SHA=$(cd "$OUTPUT_DIR" && find $CHECKSUM_PATHS -type f -print0 | sort -z \
           | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
         MANIFEST_SHA=$(sha256sum "$MANIFEST_PATH" | cut -d' ' -f1)
         COMPONENT_COUNT=$(grep -c "<members>" "$MANIFEST_PATH" || true)
 
-        (cd "$OUTPUT_DIR" && find mdapi -type f -print0 | sort -z \
+        # shellcheck disable=SC2086
+        (cd "$OUTPUT_DIR" && find $CHECKSUM_PATHS -type f -print0 | sort -z \
           | xargs -0 sha256sum > checksums.txt)
 
         # ---- toolchain provenance ---------------------------------------------
