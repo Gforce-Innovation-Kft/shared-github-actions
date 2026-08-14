@@ -12,6 +12,7 @@ updates:
     directories:
       - "/"
       - "/.github/actions/aws-secret-get"
+      - "/.github/actions/github-app-token"
       - "/.github/actions/sf-org-login"
     schedule:
       interval: "weekly"

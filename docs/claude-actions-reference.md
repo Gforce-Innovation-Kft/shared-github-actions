@@ -33,6 +33,51 @@ Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSO
 **Inputs:** `aws-region` (default `eu-central-1`), `secret-name`, `aws-role-arn`
 **Outputs:** None declared. Secret fields are exposed as env vars (e.g. `$JWT_KEY_B64`, `$USERNAME`, `$CLIENT_ID`, `$INSTANCE_URL`); reference them as `${{ env.FIELD }}` in later steps, not as step outputs.
 
+### `github-app-token` (`.github/actions/github-app-token/action.yml`)
+
+Mints a GitHub App installation access token. This is the sanctioned way to do anything
+cross-repository — `secrets.GITHUB_TOKEN` cannot reach another repo, and the alternative
+the fleet used before this action was a personal access token.
+
+One-time org setup (registering the App, its permissions, installing it, storing the
+credentials): [`docs/github-app-setup.md`](github-app-setup.md).
+
+**Why it is not a thin wrapper.** `actions/create-github-app-token` is generous in two
+directions at once: omit `repositories` and the token reaches every repo in the
+installation; omit every `permission-*` and it inherits every permission the App holds.
+Do both and you have replaced an over-broad PAT with an over-broad token that merely
+expires sooner. So this action **fails closed** — it refuses to mint until the caller has
+named the repositories *and* named the permissions, or has explicitly set
+`allow-broad-scope: true`. Those two refusals are what `ci.yml`'s smoke job pins; they
+run with a throwaway key and need no App credentials.
+
+**Inputs:** `client-id` (preferred) or `app-id` (upstream-deprecated), `private-key`,
+`owner` (default: the repository owner), `repositories`, `permission-actions` /
+`-contents` / `-packages` / `-organization-packages` / `-pull-requests` / `-issues` /
+`-checks` / `-statuses` / `-deployments` / `-workflows`, `allow-broad-scope` (default
+`false`), `skip-token-revoke` (default `false`)
+**Outputs:** `token` (masked, 1-hour lifetime), `installation-id`, `app-slug`
+
+**Traps:**
+
+- `metadata` has no input on purpose — GitHub grants it implicitly to every installation
+  token, so an input for it would be noise.
+- `packages` and `organization-packages` are different permissions and the split is easy
+  to get wrong. Pulling or pushing an image uses `packages`; changing a package's
+  visibility (`PATCH /orgs/{org}/packages/...`) or deleting a version is an **org**
+  endpoint that 403s with `packages` alone. A cleanup job that deletes throwaway tags
+  needs `organization-packages: write`.
+- A requested permission the App does **not** hold is a hard error, not a silent
+  downgrade. Widening what a caller asks for means widening the App itself first, in the
+  org's App settings.
+- The App must be *installed* on the target repo. Being registered in the org is not
+  enough, and the resulting failure is a 404 on the installation lookup, which reads like
+  a wrong App ID rather than a missing installation.
+- Credentials live at org level (`vars.GFORCE_CI_APP_ID`, `secrets.GFORCE_CI_APP_PRIVATE_KEY`)
+  so a new repo inherits them. An org secret that is not shared with the calling repo
+  arrives as an empty string, indistinguishable from never being passed — the validation
+  step names that case specifically.
+
 ### `sf-artifact-build` (`.github/actions/sf-artifact-build/action.yml`)
 
 Converts source to metadata format with Salesforce string replacements applied, then checksums

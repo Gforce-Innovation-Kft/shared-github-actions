@@ -76,6 +76,14 @@ matches plus a reference scan of test classes in the source tree.
   assumption; JSON fields are exported as env vars (reference them as
   `${{ env.FIELD }}`, not step outputs). Requires `id-token: write` +
   `contents: read`.
+- **`github-app-token`** — mint a short-lived GitHub App installation token: the
+  sanctioned way to reach another repository, since `secrets.GITHUB_TOKEN` cannot
+  and a PAT is a person's credential with account-wide scope and no expiry.
+  **Fails closed** — it will not mint until the caller names both the
+  `repositories` and the `permission-*` levels, because omitting either is how a
+  replacement for an over-broad PAT becomes an over-broad token. Outputs `token`
+  (masked, 1-hour lifetime), `installation-id`, `app-slug`. One-time org setup:
+  [`docs/github-app-setup.md`](docs/github-app-setup.md).
 - **`sf-org-login`** — authenticate to a Salesforce org, either from an SFDX auth
   URL held in a GitHub secret (`auth-method: auth-url`, the default, no cloud
   dependency) or via the JWT bearer flow with credentials from AWS Secrets
