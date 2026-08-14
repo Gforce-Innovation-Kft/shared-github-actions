@@ -6,7 +6,7 @@ carries two thin callers; all logic lives here behind the `v2` release tag.
 
 ## The flows
 
-**PR validation** (`sf-pr-validate.yml`) — code health on every PR:
+**PR validation** (`reusable-sf-pr-validate.yml`) — code health on every PR:
 
 - `jest` — runs `npm test` when the consumer's `package.json` has a `test`
   script; skips with a notice otherwise.
@@ -15,7 +15,7 @@ carries two thin callers; all logic lives here behind the `v2` release tag.
   sets, runs `RunLocalTests` with coverage, uploads the results, always
   deletes the org.
 
-**Release** (`sf-release.yml`) — one workflow, two phases:
+**Release** (`reusable-sf-release.yml`) — one workflow, two phases:
 
 - On `pull_request`: generates a delta package (sfdx-git-delta), selects
   the relevant Apex tests with `sf-apex-test-select` (naming + reference scan),
@@ -49,10 +49,10 @@ ruleset that requires branches to be up to date before merging.
 
 See the workflow files' `workflow_call` blocks for the full typed list:
 
-- [`sf-pr-validate.yml`](../.github/workflows/reusable-sf-pr-validate.yml) —
+- [`reusable-sf-pr-validate.yml`](../.github/workflows/reusable-sf-pr-validate.yml) —
   `container-image`, `checkout-submodules`, `retention-days`; secret
   `sfdx-auth-url`.
-- [`sf-release.yml`](../.github/workflows/reusable-sf-release.yml) — adds
+- [`reusable-sf-release.yml`](../.github/workflows/reusable-sf-release.yml) — adds
   `environment` (default `devhub`) and `full-deploy`; outputs the deploy
   request ids and the selected tests.
 
