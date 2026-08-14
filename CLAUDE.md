@@ -57,40 +57,24 @@ asset (repo, file, pinned ref); machine-readable twin in `docs/usage-catalog.jso
 
 ## Pipeline layers (L1–L4)
 
-> System map: [`docs/pipeline-map.md`](docs/pipeline-map.md) (mermaid — editing the
-> diagrams is how to specify a change). Code layering inside a TypeScript action is a
-> separate thing: `docs/architecture.md`.
+L1 `.github/actions/<name>/` = one operation · L2 `reusable-sf-*.yml` = composes L1 into a
+pipeline · L3 `reusable-sf-ops-dispatch.yml` = the single external entry point · L4 = consumer
+repos. L1 never calls L1; L3 inlines no Salesforce logic; nesting caps at 4.
 
-| Layer | Lives in | Contract |
-|---|---|---|
-| **L1** | `.github/actions/<name>/` | **One** SF/CLI operation. No routing, no context. |
-| **L2** | `reusable-sf-*.yml` (`workflow_call`) | Composes L1 into a business pipeline. Typed inputs/outputs, explicit `secrets:`. |
-| **L3** | `reusable-sf-ops-dispatch.yml` | Single external entry point for Salesforce. Validates, routes to one path, reports back. |
-| **L4** | consumer repos | Thin `uses:` callers. Not here. |
+**Full map and rationale: [`docs/pipeline-map.md`](docs/pipeline-map.md)** (mermaid — editing the
+diagrams is how to specify a change). Code layering inside a TypeScript action is a different
+thing: [`docs/architecture.md`](docs/architecture.md).
 
-Rules: L1 never calls L1 (routing belongs in L2/L3); L3 inlines no Salesforce logic;
-no pass-through layers; nesting caps at 4 and L4→L3→L2→action spends three. Composite
-actions have **no `secrets` context** — secrets arrive as inputs.
+## TypeScript actions
 
-## TypeScript actions (strict singleton architecture)
+All implementation in `gforce-gha-src/`; the only `.ts` outside it is each action's entry point
+(getInput → `Orchestrator.execute` → setOutput, zero logic, committed esbuild `dist/index.js`).
+Every class is a singleton; services touch only the `GitHubClient` facade. **95% coverage gate.**
 
-All implementation lives in **`gforce-gha-src/`** — the only `.ts` outside it is each
-action's entry point (`.github/actions/<name>/index.ts`: getInput → `Orchestrator.execute`
-→ setOutput, zero logic, committed esbuild `dist/index.js`).
+**Before any PR: `npm run all`** must pass (format + lint + typecheck + bundle + test + `dist:verify`).
 
-Layout: `actions/<name>` (Orchestrator + Validator singletons) · `clients/github`
-(sub-clients + `GitHubClient` facade, one thin wrapper per endpoint) · `services`
-(business workflows + sanctioned runner-API wrappers) · `libraries/salesforce`
-(`ApexTestSelectionService`, selectors, `package.xml` parsing) · `{types,utils,__tests__}`.
-
-Every class is a singleton (`getInstance`/`resetInstance`); one shared Octokit; services
-only touch the facade. Errors are throw-based, caught in the entry; expected outcomes are
-typed values. Tests: `method_scenario_expectedResult`, Given/When/Then, mock at the
-singleton boundary, **95% coverage gate**.
-
-**Adding an action:** `docs/typescript-action-authoring.md`; rationale in
-`docs/architecture.md`. **Before any PR: `npm run all`** (format + lint + typecheck +
-bundle + test + `dist:verify`) must pass.
+Authoring guide: [`docs/typescript-action-authoring.md`](docs/typescript-action-authoring.md).
+Rationale: [`docs/architecture.md`](docs/architecture.md).
 
 ## Authoring conventions
 
@@ -114,6 +98,15 @@ bundle + test + `dist:verify`) must pass.
 - `catalog-refresh.yml`: the catalog is generated — never hand-edit.
 - `release.yml`: a major bump is two steps — rewrite self-references to `@vX+1` first,
   then tag (CONTRIBUTING.md).
+
+## AI layer
+
+- **L2 skill `gforce-github-actions`** — house standards, installed via `skills-lock.json`.
+  Routes to the `docs/` above; read the entry for any asset before changing it.
+- **L2 agent `gha-workflow-author`** — writes and reviews workflows. Write scope is bounded to
+  `.github/**`; it never commits or pushes.
+- **L3 override** — repo-specific rules go in `.claude/references/local-standards.md`. Shared
+  skills read it last and it wins. **Never fork a shared skill into this repo.**
 
 <!-- skills-tooling -->
 ## Skills & AI tooling

@@ -33,6 +33,84 @@ Fetches a secret from AWS Secrets Manager using OIDC role assumption. Parsed JSO
 **Inputs:** `aws-region` (default `eu-central-1`), `secret-name`, `aws-role-arn`
 **Outputs:** None declared. Secret fields are exposed as env vars (e.g. `$JWT_KEY_B64`, `$USERNAME`, `$CLIENT_ID`, `$INSTANCE_URL`); reference them as `${{ env.FIELD }}` in later steps, not as step outputs.
 
+### `sf-artifact-build` (`.github/actions/sf-artifact-build/action.yml`)
+
+Converts source to metadata format with Salesforce string replacements applied, then checksums
+and manifests the result. This is the producing half of the **artifact boundary**: after it
+returns, the contents of `output-dir` are immutable, and `sf-artifact-deploy` verifies the
+checksum before deploying and refuses on any mismatch. The convert is explicit (rather than
+deploying source directly) because `SF_APPLY_REPLACEMENTS_ON_CONVERT=true` is the only way to get
+replacements applied to a frozen artifact — the SFDX docs say replacements are not honoured with
+`project deploy start --metadata-dir`.
+
+**Inputs:** `manifest-path` (required), `source-dir` (default `.`), `mode` (required — `delta` |
+`full`, recorded in the manifest and the artifact name), `environment` (required), `output-dir`
+(default `artifact`), `destructive-manifest` (empty ⇒ no deletions — a component deleted in git
+without one is silently orphaned in the org), `secret-template-dir` (copied *into* the artifact,
+since the deploy job has no checkout to read them from), `env-config-file` (non-secret
+per-environment values, bundled beside the templates), `base-commit` (default `0000000`),
+`head-commit` (default `GITHUB_SHA`), `retention-days` (default `90`)
+**Outputs:** `artifact-path`, `artifact-name` (`org-based-<env>-<mode>-<sha>-<run>`),
+`artifact-sha256` (checksum over `mdapi/` and `secret-templates/`), `component-count`,
+`destructive-count`
+**Caller permissions:** none beyond the checkout
+
+A secret template with no `${PLACEHOLDER}` left in it is refused outright — it looks
+pre-rendered, meaning a real value is about to be frozen into the artifact. Writes
+`deployment.json` into the artifact (schema version, commit, toolchain versions, counts,
+checksums) — `sf-artifact-deploy` and `sf-env-config-apply` both read it.
+
+### `sf-artifact-deploy` (`.github/actions/sf-artifact-deploy/action.yml`)
+
+Verifies a frozen artifact's checksum, then deploys or validates it with `--metadata-dir`. This
+is the consuming half of the artifact boundary — it has no access to source, only the directory
+`sf-artifact-build` produced, and it deploys exactly those bytes. The checksum check runs before
+anything touches an org, so a tampered artifact costs no deployment slot and cannot partially
+apply.
+
+**Inputs:** `artifact-path` (required), `expected-sha256` (empty ⇒ read from the artifact's own
+`deployment.json` — for rollback callers that have a run id rather than a checksum), `org-alias`
+(required — an already-authenticated org), `deploy-mode` (`deploy` | `validate`, default
+`deploy`), `test-level` (`NoTestRun` | `RunSpecifiedTests` | `RunLocalTests` |
+`RunAllTestsInOrg`, default `RunLocalTests`), `tests` (space-separated, required when `test-level`
+is `RunSpecifiedTests`), `wait` (default `30`)
+**Outputs:** `deploy-id`, `status` (`Succeeded` | `Failed`), `verified-sha256`
+**Caller permissions:** none — requires a prior `sf-org-login`
+
+`deploy-mode: validate` with `test-level: NoTestRun` is refused: a check-only deployment that
+runs no tests validates nothing. On failure it reports both levels of Salesforce's error
+shape — the top-level CLI rejection (bad manifest, missing org, malformed zip) and, when the
+deploy got that far, per-component and per-test failures — because reporting only
+`componentFailures` turns a CLI-level rejection into "(no component detail)". Finalises
+`deployment.json` in an `if: always()` step so a failed deployment is recorded rather than left
+stuck at `built`.
+
+### `sf-env-config-apply` (`.github/actions/sf-env-config-apply/action.yml`)
+
+Renders secret-bearing Custom Metadata from `*.md-meta.xml.tpl` templates and deploys it, after
+the artifact. Runs as a **second, smaller deployment** deliberately: the artifact is uploaded and
+retained, so anything baked into it at convert time is retained too, and Custom Metadata records
+cannot be upserted through the Data API — they have to be deployed. Templates and the non-secret
+`env-config.json` bundled beside them normally live in `<artifact>/secret-templates`, because
+this job has no checkout.
+
+**Inputs:** `template-dir` (required — normally `<artifact>/secret-templates`), `required`
+(default `true` — whether finding no templates is an error; see below), `org-alias` (required),
+`api-version` (default `65.0`)
+**Outputs:** `records-applied`
+**Caller permissions:** none — requires a prior `sf-org-login`
+
+`required` defaults to `true` on purpose: an early real deployment pointed this action at a path
+that did not exist in the deploy job, and it reported "nothing to apply" and passed — the
+credential silently never landed. Every unresolved `${VAR}` in a template is checked **before**
+rendering, because `envsubst` substitutes an empty string for an unset variable rather than
+leaving the placeholder behind, which is how a record once deployed with a label like
+`"Github Gforce App ()"`. When `sf-artifact-build`'s `deployment.json` recorded a
+`secretTemplateCount`, the count found here must match it exactly, so a shortfall is a named
+mismatch rather than a silent no-op. Rendered files are written to a `mktemp -d` directory and
+shredded on every exit path (`trap ... EXIT`), since they hold plaintext credentials for the
+duration of the deploy.
+
 ### `sf-org-login` (`.github/actions/sf-org-login/action.yml`)
 
 The single login action — **two credential sources, one contract**. `auth-method: auth-url` (default) runs `sf org login sfdx-url` from a GitHub secret, no cloud dependency. `auth-method: jwt` runs `aws-secret-get`, decodes the base64 key, and runs `sf org login jwt`. Both end with the same authenticated `sf` CLI under `org-alias`, so downstream actions never branch on how the job authenticated. Inputs are validated before any credential file is written; every credential file is removed in an `if: always()` step. JSON parsing uses `node` (not `jq`) so it works inside any container that has the SF CLI.
@@ -198,6 +276,42 @@ its dependency directories.
 UID it cannot resolve. Flip the default to `1001` once sf-docker-images v3.0.0 ships —
 that is the entire point of the input, and until then it is a breaking change to flip.
 
+### `reusable-sf-org-deploy` (`.github/workflows/reusable-sf-org-deploy.yml`)
+
+Deploys Salesforce metadata from git to a long-lived org (integration, UAT, production —
+anything that is not a scratch org). Two jobs, and the job boundary **is** the artifact
+boundary: `build` (plan delta vs. full from a `deployed/<environment>` tag, run
+`sf-source-delta`/`sf-apex-test-select`, freeze via `sf-artifact-build`, scan with `gitleaks`,
+upload) has no secrets and cannot reach environment credentials; `deploy` (download, log in with
+`sf-org-login`, deploy/validate via `sf-artifact-deploy`, apply secrets via `sf-env-config-apply`,
+move the `deployed/<environment>` tag) has no checkout and so cannot rebuild what it deploys.
+Design notes and failure decoder: `docs/org-deploy-engine.md`.
+
+`environment:` is deliberately **not** set on `build` — an environment with a required reviewer
+would gate the job before the artifact exists, so a reviewer would be approving a deployment
+whose contents (component list, checksum) are still unknown. The gate belongs on `deploy`, where
+there is something to review.
+
+**Key inputs:** `environment` (required — GitHub Environment and Salesforce target), `deploy-mode`
+(`validate` | `deploy`, default `validate`), `mode` (`delta` | `full`, default `delta`),
+`source-dir` (default `.`), `test-level` (empty ⇒ pipeline decides: `RunLocalTests` for full or
+when delta selected no tests, `RunSpecifiedTests` when delta selected tests), `secret-template-dir`
+(default `config/secret-templates`), `container-image` (default `gforceinnovation/sf-ci:3.1.0` —
+pinned, never `latest`, because the image is the source of tool versions), `retention-days`
+(default `90`)
+**Secrets:** `sf-jwt-key-b64` (required), `github-app-key-b64` (optional), `owm-api-key`
+(optional)
+**Outputs:** `artifact-name`, `component-count`, `deploy-id`
+**Caller permissions:** `contents: read` on `build`; `contents: write` on `deploy` (to move the
+`deployed/<environment>` tag)
+
+`build` refuses to run when the artifact would carry a secret: a hard gate as of `sf-ci` 3.1.0,
+which ships `gitleaks` — a missing scanner now fails rather than warns, since "we could not
+check" must not read as "we checked and it was fine". `concurrency` is one deploy at a time per
+environment with `cancel-in-progress: false`, because a half-applied deploy leaves no record to
+resume from. On first deployment to an environment (no `deployed/<env>` tag yet) `mode` is forced
+to `full` regardless of the input.
+
 ### `reusable-sf-ops-dispatch` (`.github/workflows/reusable-sf-ops-dispatch.yml`)
 
 **L3 — the single external entry point.** Salesforce (LWC → Apex → GitHub App JWT → dispatch API) asks for one operation; this routes it to exactly one path and reports the terminal status back. Design record: ADR 0001. Salesforce-side contract: `docs/consuming-sf-dispatch.md`.
@@ -240,6 +354,50 @@ granted, `if:`-skipped or not. This is why the workflow sat in `startup_failure`
 the day it was added until 2026-08-06: it granted `permissions: {}`. A startup failure
 produces no check run, so it never appeared as a red check on a PR — if this workflow
 seems to be passing, confirm it actually *ran*.
+
+### `smoke-sf-artifact.yml`
+
+Org-free contract tests for `sf-artifact-build` and `sf-artifact-deploy`, against a throwaway
+sfdx fixture rather than any real repo — building an artifact needs no org, so this runs on
+every PR touching those actions at zero cost. Five properties, each chosen because it has a way
+of failing silently: (1) a replacement actually fires at convert time — the claim the whole
+artifact-boundary design rests on; (2) an unset replacement env var **fails** the build rather
+than shipping a literal placeholder to an org (`unset-replacement-fails` job); (3) the emitted
+`artifact-sha256` matches the bytes on disk, recomputed independently in the test; (4) a
+deletion in `destructive-manifest` is carried into `destructiveChangesPost.xml` and counted, or a
+deleted component orphans in the org forever while the run reports success; (5) a tampered
+artifact is refused by `sf-artifact-deploy` **before** any org is contacted
+(`reject-tampered-artifact` job, asserting the failure came from the checksum gate specifically,
+not from the nonexistent target org). A fifth job, `reject-validate-without-tests`, is a
+regression guard for `sf-artifact-deploy`'s own `validate` + `NoTestRun` refusal.
+
+**Runs on:** `pull_request` (paths: `.github/actions/sf-artifact-build/**`,
+`.github/actions/sf-artifact-deploy/**`, its own file) and `workflow_dispatch`. Uses
+`gforceinnovation/sf-ci:latest` with `--user 1001`, `./` refs to exercise the actions under test
+directly.
+
+### `smoke-sf-org-login.yml`
+
+Input-contract tests for `sf-org-login`, deliberately **credential-free** — every case is
+rejected by the action's validation step before any network call, so it runs on every PR at zero
+cost and without a Salesforce private key in this repo. `rejects-bad-input` is a matrix covering:
+a My Domain URL passed as `instance-url` (the most common JWT failure in CI — should be named
+immediately rather than surfacing ~60s later as a generic server-side error), a missing
+`jwt-key-b64`, a missing `username`, an unknown `credential-source`, and an unknown
+`auth-method`. `rejects-malformed-key` asserts non-PEM base64 fails the PEM guard before
+Salesforce is ever contacted. `auth-url-still-validated` is a regression guard: adding
+`credential-source` must not have altered the historical `auth-url` branch's validation.
+
+**Runs on:** `pull_request` (paths: `.github/actions/sf-org-login/**`, its own file) and
+`workflow_dispatch`. Runs on `ubuntu-latest`, not the `sf-ci` container — no case here reaches a
+step that invokes `sf`, so pulling the image would only add latency. The real end-to-end login
+is tested where the credentials legitimately live: `verify-org-login.yml` in `sf-develop-demo`.
+
+> Note: this workflow's fixtures exercise `sf-org-login` inputs (`credential-source`,
+> `jwt-key-b64`, `client-id`, `instance-url`) added by a later change than this reference's
+> `sf-org-login` entry above documents (`auth-method`/`aws-role-arn`/`secret-name` for the `jwt`
+> path). The `sf-org-login` entry itself was out of scope for this update — flagged here rather
+> than silently left inconsistent.
 
 ### `catalog-refresh.yml`
 Weekly (and on `workflow_dispatch`): re-runs `.github/scripts/build-usage-catalog.sh` and
