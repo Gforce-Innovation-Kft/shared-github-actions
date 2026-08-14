@@ -1,0 +1,279 @@
+name: 'GitHub App Token'
+description: 'Mint a short-lived, scoped GitHub App installation token — the sanctioned replacement for cross-repo personal access tokens'
+author: 'GForce Innovation'
+
+# ==============================================================================
+# Why this action exists.
+#
+# `secrets.GITHUB_TOKEN` cannot touch another repository. Every cross-repo job
+# in the fleet therefore reached for a PAT, and a PAT is the worst credential
+# available for the purpose:
+#
+#   * it belongs to a person, so the audit log says "gambe94", not "the CI"
+#   * it lives until someone remembers to rotate it
+#   * its scopes are account-wide — `repo` grants write to every repo the human
+#     can see, not the one repo the job needs
+#   * it dies with the person's account
+#
+# An App installation token is the opposite on all four counts: it expires in
+# one hour, it is attributable to the bot, and it is scoped twice over — to a
+# named list of repositories AND to a named list of permissions.
+#
+# Callers need the App's credentials, which live as org-level secrets so a new
+# repo inherits them without a per-repo copy:
+#
+#   vars.GFORCE_CI_APP_ID            App ID (or client ID — see below)
+#   secrets.GFORCE_CI_APP_PRIVATE_KEY  the PEM, whole file including headers
+#
+# ------------------------------------------------------------------------------
+# Scoping is enforced, not suggested.
+#
+# `actions/create-github-app-token` defaults are generous in both directions:
+# omit `repositories` and the token reaches every repo in the installation;
+# omit the `permission-*` inputs and it inherits every permission the App holds.
+# Two omissions and the token you minted to replace an over-broad PAT is an
+# over-broad token with a shorter life.
+#
+# So this action fails closed: name the repositories, name the permissions, or
+# set `allow-broad-scope: true` and say in the diff why you need it.
+# ==============================================================================
+
+inputs:
+  # --- identity --------------------------------------------------------------
+  client-id:
+    description: |
+      GitHub App Client ID (`Iv23li...`). Preferred over app-id — upstream
+      deprecated the numeric App ID in create-github-app-token v3. Find it on
+      the App's settings page directly under the App ID.
+    required: false
+    default: ''
+  app-id:
+    description: |
+      Numeric GitHub App ID. Still works, but upstream emits a deprecation
+      warning on every run. Pass client-id instead when you can.
+    required: false
+    default: ''
+  private-key:
+    description: |
+      The App's PEM private key — always a secret, never a literal. Pass the
+      whole file including the BEGIN/END lines; a key pasted without them
+      fails with a signature error that names nothing useful.
+    required: true
+
+  # --- scope: which repositories ---------------------------------------------
+  owner:
+    description: 'Org or user that owns the installation. Defaults to the repository owner.'
+    required: false
+    default: ''
+  repositories:
+    description: |
+      Newline- or comma-separated repository names (bare names, not owner/name)
+      the token may act on, e.g. `sf-develop-demo`. Required unless
+      allow-broad-scope is true.
+    required: false
+    default: ''
+
+  # --- scope: which permissions ----------------------------------------------
+  # Pass-through to create-github-app-token. Each is 'read' or 'write', and each
+  # must already be held by the App — asking for more than the installation has
+  # is an error, not a silent downgrade.
+  #
+  # `metadata` is deliberately absent: GitHub grants it implicitly to every
+  # installation token, so requesting it would be noise.
+  permission-actions:
+    description: "Workflows, workflow runs and artifacts. 'write' is what dispatching a workflow in another repo needs."
+    required: false
+    default: ''
+  permission-contents:
+    description: 'Repository contents, commits, branches, releases.'
+    required: false
+    default: ''
+  permission-packages:
+    description: "GitHub Packages / GHCR. 'read' is what pulling a candidate container image needs."
+    required: false
+    default: ''
+  permission-organization-packages:
+    description: |
+      Org-level package administration. Distinct from permission-packages, and
+      the difference is not obvious: reading or pushing a package uses
+      `packages`, but `PATCH /orgs/{org}/packages/...` (visibility) and
+      `DELETE .../versions/{id}` (cleanup) are org endpoints and 403 with
+      `packages` alone.
+    required: false
+    default: ''
+  permission-pull-requests:
+    description: 'Pull requests and related comments, assignees, labels, milestones.'
+    required: false
+    default: ''
+  permission-issues:
+    description: 'Issues and related comments, assignees, labels, milestones.'
+    required: false
+    default: ''
+  permission-checks:
+    description: 'Checks on code.'
+    required: false
+    default: ''
+  permission-statuses:
+    description: 'Commit statuses.'
+    required: false
+    default: ''
+  permission-deployments:
+    description: 'Deployments and deployment statuses.'
+    required: false
+    default: ''
+  permission-workflows:
+    description: 'Updating files in .github/workflows. Needed only to COMMIT workflow changes, not to run them.'
+    required: false
+    default: ''
+
+  # --- escape hatch ----------------------------------------------------------
+  allow-broad-scope:
+    description: |
+      Skip the repository and permission guards, taking whatever the
+      installation grants. Off by default. Turn it on only with a comment in
+      the caller explaining which broad scope is actually required and why.
+    required: false
+    default: 'false'
+  skip-token-revoke:
+    description: |
+      Leave the token valid when the job ends instead of revoking it. Off by
+      default. Only turn this on when a later job in the same workflow consumes
+      the token through an output.
+    required: false
+    default: 'false'
+
+outputs:
+  token:
+    description: 'The installation access token, masked in the log. Expires in 1 hour.'
+    value: ${{ steps.mint.outputs.token }}
+  installation-id:
+    description: 'Installation the token was issued for — the id to quote when an App permission needs changing.'
+    value: ${{ steps.mint.outputs.installation-id }}
+  app-slug:
+    description: "Slug of the App the token belongs to; this is the actor name that appears in the target repo's audit log."
+    value: ${{ steps.mint.outputs.app-slug }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        CLIENT_ID: ${{ inputs.client-id }}
+        APP_ID: ${{ inputs.app-id }}
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        REPOSITORIES: ${{ inputs.repositories }}
+        ALLOW_BROAD_SCOPE: ${{ inputs.allow-broad-scope }}
+        PERMS: >-
+          ${{ inputs.permission-actions }}${{ inputs.permission-contents }}${{ inputs.permission-packages }}${{
+          inputs.permission-organization-packages }}${{ inputs.permission-pull-requests }}${{
+          inputs.permission-issues }}${{ inputs.permission-checks }}${{ inputs.permission-statuses }}${{
+          inputs.permission-deployments }}${{ inputs.permission-workflows }}
+      run: |
+        set -euo pipefail
+
+        # An unset org variable arrives as an empty string rather than being
+        # absent, so a typo'd `vars.GFORCE_CI_APP_ID` looks identical to not
+        # passing one. Name that here, where the message can say which secret.
+        if [ -z "$CLIENT_ID" ] && [ -z "$APP_ID" ]; then
+          echo "::error::Pass client-id (preferred) or app-id. Both were empty — check vars.GFORCE_CI_APP_ID is set at the org and visible to this repo." >&2
+          exit 1
+        fi
+
+        if [ -z "$PRIVATE_KEY" ]; then
+          echo "::error::private-key is empty. Check secrets.GFORCE_CI_APP_PRIVATE_KEY is set at the org and this repo is in its selected-repositories list." >&2
+          exit 1
+        fi
+
+        # A key pasted without its armour signs nothing, and the resulting
+        # error arrives from GitHub as a bare 401.
+        case "$PRIVATE_KEY" in
+          *"BEGIN"*"PRIVATE KEY"*) ;;
+          *)
+            echo "::error::private-key does not look like a PEM. Paste the whole .pem file including the -----BEGIN RSA PRIVATE KEY----- and -----END----- lines." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$ALLOW_BROAD_SCOPE" = "true" ]; then
+          echo "::warning::allow-broad-scope is on — this token takes every repository and permission the installation holds."
+          exit 0
+        fi
+
+        if [ -z "$REPOSITORIES" ]; then
+          echo "::error::repositories is empty, so the token would reach every repo in the installation. Name the repos this job touches, or set allow-broad-scope: true with a comment saying why." >&2
+          exit 1
+        fi
+
+        # Concatenated rather than counted: any one permission being non-empty
+        # is enough to prove the caller thought about scope.
+        if [ -z "$(echo "$PERMS" | tr -d '[:space:]')" ]; then
+          echo "::error::No permission-* input was set, so the token would inherit every permission the App holds. Name the permissions this job needs (e.g. permission-actions: write), or set allow-broad-scope: true with a comment saying why." >&2
+          exit 1
+        fi
+
+    - name: Mint the installation token
+      id: mint
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.owner || github.repository_owner }}
+        repositories: ${{ inputs.repositories }}
+        skip-token-revoke: ${{ inputs.skip-token-revoke }}
+        permission-actions: ${{ inputs.permission-actions }}
+        permission-contents: ${{ inputs.permission-contents }}
+        permission-packages: ${{ inputs.permission-packages }}
+        permission-organization-packages: ${{ inputs.permission-organization-packages }}
+        permission-pull-requests: ${{ inputs.permission-pull-requests }}
+        permission-issues: ${{ inputs.permission-issues }}
+        permission-checks: ${{ inputs.permission-checks }}
+        permission-statuses: ${{ inputs.permission-statuses }}
+        permission-deployments: ${{ inputs.permission-deployments }}
+        permission-workflows: ${{ inputs.permission-workflows }}
+
+    # What the token can do is invisible at the point of use — a 403 twenty
+    # lines later reads as "the API refused" rather than "the App lacks
+    # actions: write". Print the scope here so the log says which.
+    - name: Report the scope
+      shell: bash
+      env:
+        APP_SLUG: ${{ steps.mint.outputs.app-slug }}
+        INSTALLATION_ID: ${{ steps.mint.outputs.installation-id }}
+        OWNER: ${{ inputs.owner || github.repository_owner }}
+        REPOSITORIES: ${{ inputs.repositories }}
+        ALLOW_BROAD_SCOPE: ${{ inputs.allow-broad-scope }}
+        P_ACTIONS: ${{ inputs.permission-actions }}
+        P_CONTENTS: ${{ inputs.permission-contents }}
+        P_PACKAGES: ${{ inputs.permission-packages }}
+        P_ORG_PACKAGES: ${{ inputs.permission-organization-packages }}
+        P_PULL_REQUESTS: ${{ inputs.permission-pull-requests }}
+        P_ISSUES: ${{ inputs.permission-issues }}
+        P_CHECKS: ${{ inputs.permission-checks }}
+        P_STATUSES: ${{ inputs.permission-statuses }}
+        P_DEPLOYMENTS: ${{ inputs.permission-deployments }}
+        P_WORKFLOWS: ${{ inputs.permission-workflows }}
+      run: |
+        set -euo pipefail
+
+        echo "✅ Minted an installation token"
+        echo "   App:          ${APP_SLUG:-unknown} (installation ${INSTALLATION_ID:-unknown})"
+        echo "   Owner:        $OWNER"
+        if [ "$ALLOW_BROAD_SCOPE" = "true" ]; then
+          echo "   Repositories: ALL in the installation (allow-broad-scope)"
+          echo "   Permissions:  ALL the App holds (allow-broad-scope)"
+        else
+          echo "   Repositories: $(echo "$REPOSITORIES" | tr '\n' ' ' | tr -s ' ')"
+          echo "   Permissions:"
+          for PAIR in \
+            "actions:$P_ACTIONS" "contents:$P_CONTENTS" "packages:$P_PACKAGES" \
+            "organization-packages:$P_ORG_PACKAGES" \
+            "pull-requests:$P_PULL_REQUESTS" "issues:$P_ISSUES" "checks:$P_CHECKS" \
+            "statuses:$P_STATUSES" "deployments:$P_DEPLOYMENTS" "workflows:$P_WORKFLOWS"; do
+            NAME="${PAIR%%:*}"
+            LEVEL="${PAIR#*:}"
+            [ -n "$LEVEL" ] && printf '     %-14s %s\n' "$NAME" "$LEVEL"
+          done
+        fi
+        echo "   Expires:      1 hour from now"
