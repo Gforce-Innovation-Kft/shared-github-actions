@@ -49,7 +49,8 @@ replacements applied to a frozen artifact — the SFDX docs say replacements are
 without one is silently orphaned in the org), `secret-template-dir` (copied *into* the artifact,
 since the deploy job has no checkout to read them from), `env-config-file` (non-secret
 per-environment values, bundled beside the templates), `base-commit` (default `0000000`),
-`head-commit` (default `GITHUB_SHA`), `retention-days` (default `90`)
+`head-commit` (default empty — falls back to `$GITHUB_SHA` at runtime), `retention-days`
+(default `90`)
 **Outputs:** `artifact-path`, `artifact-name` (`org-based-<env>-<mode>-<sha>-<run>`),
 `artifact-sha256` (checksum over `mdapi/` and `secret-templates/`), `component-count`,
 `destructive-count`
@@ -126,6 +127,9 @@ The single login action — **two credential sources, one contract**. `auth-meth
 > with `auth-method: jwt` and stating `org-alias`/`set-default-dev-hub`
 > explicitly — the merged action defaults to `target`/`false`, not the old
 > `devhub`/`true`.
+
+> **Stale:** this entry predates PR #16 and omits the `credential-source: github-env` input it
+> added. Details in the note under `smoke-sf-org-login.yml` below.
 
 ### `sf-source-delta` (`.github/actions/sf-source-delta/action.yml`)
 
@@ -368,8 +372,11 @@ deletion in `destructive-manifest` is carried into `destructiveChangesPost.xml` 
 deleted component orphans in the org forever while the run reports success; (5) a tampered
 artifact is refused by `sf-artifact-deploy` **before** any org is contacted
 (`reject-tampered-artifact` job, asserting the failure came from the checksum gate specifically,
-not from the nonexistent target org). A fifth job, `reject-validate-without-tests`, is a
-regression guard for `sf-artifact-deploy`'s own `validate` + `NoTestRun` refusal.
+not from the nonexistent target org). The workflow has 4 jobs total (`build-artifact` covers
+properties 1, 3 and 4; `unset-replacement-fails` covers 2; `reject-tampered-artifact` covers 5);
+the 4th job, `reject-validate-without-tests`, sits outside the header's five-property
+enumeration — it is a regression guard for `sf-artifact-deploy`'s own `validate` + `NoTestRun`
+refusal.
 
 **Runs on:** `pull_request` (paths: `.github/actions/sf-artifact-build/**`,
 `.github/actions/sf-artifact-deploy/**`, its own file) and `workflow_dispatch`. Uses
