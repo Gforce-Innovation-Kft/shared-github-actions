@@ -178,3 +178,54 @@ jobs:
         run: |
           test "$PROMOTE_OUTCOME" = "failure"
           test "$INSTALL_OUTCOME" = "failure"
+
+      # github-app-token guards scope before it ever calls GitHub, so all three
+      # rejections run here with a throwaway key and no App credentials at all.
+      # The guards are the reason the action exists — an unscoped installation
+      # token is just a PAT with a shorter life — so they are what CI pins.
+      - name: Smoke github-app-token (must reject a non-PEM private key)
+        id: app-token-bad-key
+        continue-on-error: true
+        uses: ./.github/actions/github-app-token
+        with:
+          client-id: Iv23liSMOKE0000000
+          private-key: not-a-pem
+          repositories: shared-github-actions
+          permission-contents: read
+
+      - name: Smoke github-app-token (must reject an unnamed repository scope)
+        id: app-token-no-repos
+        continue-on-error: true
+        uses: ./.github/actions/github-app-token
+        with:
+          client-id: Iv23liSMOKE0000000
+          private-key: |
+            -----BEGIN RSA PRIVATE KEY-----
+            SMOKE
+            -----END RSA PRIVATE KEY-----
+          permission-contents: read
+
+      - name: Smoke github-app-token (must reject an unnamed permission scope)
+        id: app-token-no-perms
+        continue-on-error: true
+        uses: ./.github/actions/github-app-token
+        with:
+          client-id: Iv23liSMOKE0000000
+          private-key: |
+            -----BEGIN RSA PRIVATE KEY-----
+            SMOKE
+            -----END RSA PRIVATE KEY-----
+          repositories: shared-github-actions
+
+      - name: Assert github-app-token fails closed on every unscoped route
+        env:
+          BAD_KEY_OUTCOME: ${{ steps.app-token-bad-key.outcome }}
+          NO_REPOS_OUTCOME: ${{ steps.app-token-no-repos.outcome }}
+          NO_PERMS_OUTCOME: ${{ steps.app-token-no-perms.outcome }}
+        run: |
+          test "$BAD_KEY_OUTCOME" = "failure"
+          # These two are the ones that matter: both would otherwise SUCCEED,
+          # handing back a working token that reaches every repo in the
+          # installation with every permission the App holds.
+          test "$NO_REPOS_OUTCOME" = "failure"
+          test "$NO_PERMS_OUTCOME" = "failure"
