@@ -2,11 +2,11 @@
 
 Two reusable workflows give a Salesforce project a complete trunk-based
 CI/CD pipeline against a single org (Dev Hub / production). The consumer
-carries two thin callers; all logic lives here behind the `v1` release tag.
+carries two thin callers; all logic lives here behind the `v2` release tag.
 
 ## The flows
 
-**PR validation** (`sf-pr-validate.yml`) — code health on every PR:
+**PR validation** (`reusable-sf-pr-validate.yml`) — code health on every PR:
 
 - `jest` — runs `npm test` when the consumer's `package.json` has a `test`
   script; skips with a notice otherwise.
@@ -15,7 +15,7 @@ carries two thin callers; all logic lives here behind the `v1` release tag.
   sets, runs `RunLocalTests` with coverage, uploads the results, always
   deletes the org.
 
-**Release** (`sf-release.yml`) — one workflow, two phases:
+**Release** (`reusable-sf-release.yml`) — one workflow, two phases:
 
 - On `pull_request`: generates a delta package (sfdx-git-delta), selects
   the relevant Apex tests with `sf-apex-test-select` (naming + reference scan),
@@ -40,8 +40,8 @@ ruleset that requires branches to be up to date before merging.
    `sf org display` redacts it as of CLI 2.14x). Never commit it.
 2. GitHub Environment `devhub` with required reviewers — the manual deploy
    gate.
-3. The two caller workflows — copy `examples/sf-pr-validate.yml` and
-   `examples/sf-release.yml`.
+3. The two caller workflows — copy `examples/reusable-sf-pr-validate.yml` and
+   `examples/reusable-sf-release.yml`.
 4. A `main` ruleset: require PRs, require the `jest`, `scratch-org` and
    `validate` checks, and require branches to be up to date.
 
@@ -49,10 +49,10 @@ ruleset that requires branches to be up to date before merging.
 
 See the workflow files' `workflow_call` blocks for the full typed list:
 
-- [`sf-pr-validate.yml`](../.github/workflows/reusable-sf-pr-validate.yml) —
+- [`reusable-sf-pr-validate.yml`](../.github/workflows/reusable-sf-pr-validate.yml) —
   `container-image`, `checkout-submodules`, `retention-days`; secret
   `sfdx-auth-url`.
-- [`sf-release.yml`](../.github/workflows/reusable-sf-release.yml) — adds
+- [`reusable-sf-release.yml`](../.github/workflows/reusable-sf-release.yml) — adds
   `environment` (default `devhub`) and `full-deploy`; outputs the deploy
   request ids and the selected tests.
 
@@ -65,8 +65,8 @@ See the workflow files' `workflow_call` blocks for the full typed list:
 | `sf-apex-test-select` (TypeScript action) | Delta-scoped Apex test selection |
 
 Composite/TS actions inside the reusable workflows are referenced by
-absolute `@v1` refs because actions resolve against the **caller's**
-checkout. Everything ships together in one release: consumers on `@v1`
+absolute `@v2` refs because actions resolve against the **caller's**
+checkout. Everything ships together in one release: consumers on `@v2`
 always get matching workflow + action versions.
 
 ## Fork limitation

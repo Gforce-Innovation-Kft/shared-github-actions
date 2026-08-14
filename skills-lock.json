@@ -25,6 +25,12 @@
       "skillPath": "skills/dx-pkg-post-install-configure/SKILL.md",
       "computedHash": "30dd5bea1d8ed3a73c319ed04b766f208629dd7a8cd788b66302352495895792"
     },
+    "gforce-github-actions": {
+      "source": "Gforce-Innovation-Kft/gforce-ai",
+      "sourceType": "github",
+      "skillPath": "skills/gforce-github-actions/SKILL.md",
+      "computedHash": "ae7dfd1e8fcb6393c932b682b6d8dad9e392bbc364d70a8aaa39920fa09a94f5"
+    },
     "github-actions-docs": {
       "source": "xixu-me/skills",
       "sourceType": "github",
