@@ -42,7 +42,7 @@ lists live in each `action.yml`; runnable callers are in [`examples/`](examples)
 Synchronize one branch into another: fast-forward when possible, else a
 server-side merge, else open a "sync" pull request on conflict.
 
-- **Key inputs:** `source-branch`_, `target-branch`_, `strategy` (`auto` | `fast-forward` | `merge`, default `auto`), `dry-run` (default **`true`**), `github-token` (default `${{ github.token }}`).
+- **Key inputs:** `source-branch`*, `target-branch`*, `strategy` (`auto` | `fast-forward` | `merge`, default `auto`), `dry-run` (default **`true`**), `github-token` (default `${{ github.token }}`).
 - **Key outputs:** `synced`, `action`, `result-sha`, `pull-request-number`, `pull-request-url`, `ahead-by`, `behind-by`, `reason`.
 - **Permissions:** `contents: write` (moves the target ref / merges) + `pull-requests: write` (opens the sync PR on conflict).
 
@@ -51,7 +51,7 @@ server-side merge, else open a "sync" pull request on conflict.
 Create or update a release pull request between two branches, with a templated
 title/body, labels, and reviewers.
 
-- **Key inputs:** `source-branch`_, `target-branch`_, `release-version`\*, `title`, `body-template` (`{{version}}`/`{{source}}`/`{{target}}`/`{{commits}}`/`{{files}}`), `draft` (default `false`), `labels`, `reviewers`, `dry-run` (default **`true`**), `github-token` (default `${{ github.token }}`).
+- **Key inputs:** `source-branch`*, `target-branch`*, `release-version`*, `title`, `body-template` (`{{version}}`/`{{source}}`/`{{target}}`/`{{commits}}`/`{{files}}`), `draft` (default `false`), `labels`, `reviewers`, `dry-run` (default **`true`**), `github-token` (default `${{ github.token }}`).
 - **Key outputs:** `pull-request-number`, `pull-request-url`, `created`, `updated`.
 - **Permissions:** `contents: read` (compare only) + `pull-requests: write`.
 
@@ -63,7 +63,7 @@ title/body, labels, and reviewers.
 Select the Apex test classes relevant to a delta `package.xml` — naming-convention
 matches plus a reference scan of test classes in the source tree.
 
-- **Key inputs:** `package-xml`\*, `source-dir` (default `force-app`),
+- **Key inputs:** `package-xml`*, `source-dir` (default `force-app`),
   `test-suffixes` (default `Test,_Test,Tests`), `github-token` (default
   `${{ github.token }}` — this action makes no GitHub API calls; the input
   exists only for the shared runtime).
@@ -92,7 +92,7 @@ matches plus a reference scan of test classes in the source tree.
   up every credential file in an `if: always()` step.
   Replaces the former `sf-jwt-login` — see [CLAUDE.md](CLAUDE.md#sf-org-login--githubactionssf-org-loginactionyml).
 - **`sf-source-delta`** — generate a delta `package.xml` between two git refs
-  with sfdx-git-delta. Inputs `from-ref`\*, `to-ref`, `output-dir`, `source-dir`,
+  with sfdx-git-delta. Inputs `from-ref`*, `to-ref`, `output-dir`, `source-dir`,
   `generate-delta`; outputs `package-path`, `has-changes`, `component-count`.
   Requires a `fetch-depth: 0` checkout.
 - **`sf-org-scratch-create`** — create a scratch org, refusing to start when the Dev Hub
@@ -171,12 +171,12 @@ opens a PR on drift), and `release.yml` (tag → Release + floating major tag).
 
 Releases follow semver, published as git tags with a floating major tag:
 
-| Pin        | Example     | Behavior                                                                             |
-| ---------- | ----------- | ------------------------------------------------------------------------------------ |
-| Major tag  | `@v2`       | **Recommended.** Moves with every non-breaking release; you get fixes automatically. |
-| Exact tag  | `@v2.0.0`   | Immutable; bump manually.                                                            |
-| Commit SHA | `@93cb6ef…` | Strictest supply-chain pin; pair with Dependabot to stay current.                    |
-| `@main`    | —           | Development only. Unreleased, may break at any time.                                 |
+| Pin | Example | Behavior |
+|-----|---------|----------|
+| Major tag | `@v2` | **Recommended.** Moves with every non-breaking release; you get fixes automatically. |
+| Exact tag | `@v2.0.0` | Immutable; bump manually. |
+| Commit SHA | `@93cb6ef…` | Strictest supply-chain pin; pair with Dependabot to stay current. |
+| `@main` | — | Development only. Unreleased, may break at any time. |
 
 Pushing a `vX.Y.Z` tag triggers [`release.yml`](.github/workflows/release.yml),
 which creates the GitHub Release and force-moves the `vX` major tag. Breaking
@@ -191,7 +191,7 @@ in decisions 1 and 2 of that ADR.
 The release procedure for maintainers is in
 [CONTRIBUTING.md](CONTRIBUTING.md#release-process). It has a manual step: a major
 bump must rewrite the reusable workflows' own self-references to the new tag
-_before_ tagging.
+*before* tagging.
 
 **Development happens on `main`.** `develop` was merged and deleted on 2026-08-06 —
 open PRs against `main`.

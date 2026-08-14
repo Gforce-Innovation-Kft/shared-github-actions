@@ -4,22 +4,19 @@ Detailed inputs/outputs/permissions and per-asset traps for every action and
 reusable workflow. Relocated from CLAUDE.md on 2026-08-08 to keep the
 always-loaded context lean — read this file when working on a specific asset.
 The authoritative contract is always the asset's own `action.yml` /
-workflow file; this doc carries the _traps and rationale_ that the YAML cannot.
+workflow file; this doc carries the *traps and rationale* that the YAML cannot.
 
 ## TypeScript actions
 
 ### `github-branch-sync`
-
 Fast-forward / merge / open a sync PR on conflict. `dry-run` defaults to `true`.
 Caller permissions: `contents: write` + `pull-requests: write`.
 
 ### `github-release-pr-create`
-
 Create or update a release PR (templated body, labels, reviewers). `dry-run`
 defaults to `true`. Caller permissions: `contents: read` + `pull-requests: write`.
 
 ### `sf-apex-test-select`
-
 Select the Apex test classes relevant to a delta `package.xml` —
 naming-convention matches plus a reference scan of the source tree. Inputs:
 `package-xml` (required), `source-dir` (default `force-app`),
@@ -50,7 +47,7 @@ directions at once: omit `repositories` and the token reaches every repo in the
 installation; omit every `permission-*` and it inherits every permission the App holds.
 Do both and you have replaced an over-broad PAT with an over-broad token that merely
 expires sooner. So this action **fails closed** — it refuses to mint until the caller has
-named the repositories _and_ named the permissions, or has explicitly set
+named the repositories *and* named the permissions, or has explicitly set
 `allow-broad-scope: true`. Those two refusals are what `ci.yml`'s smoke job pins; they
 run with a throwaway key and need no App credentials.
 
@@ -73,7 +70,7 @@ run with a throwaway key and need no App credentials.
 - A requested permission the App does **not** hold is a hard error, not a silent
   downgrade. Widening what a caller asks for means widening the App itself first, in the
   org's App settings.
-- The App must be _installed_ on the target repo. Being registered in the org is not
+- The App must be *installed* on the target repo. Being registered in the org is not
   enough, and the resulting failure is a 404 on the installation lookup, which reads like
   a wrong App ID rather than a missing installation.
 - Credentials live at org level (`vars.GFORCE_CI_APP_ID`, `secrets.GFORCE_CI_APP_PRIVATE_KEY`)
@@ -94,7 +91,7 @@ replacements applied to a frozen artifact — the SFDX docs say replacements are
 **Inputs:** `manifest-path` (required), `source-dir` (default `.`), `mode` (required — `delta` |
 `full`, recorded in the manifest and the artifact name), `environment` (required), `output-dir`
 (default `artifact`), `destructive-manifest` (empty ⇒ no deletions — a component deleted in git
-without one is silently orphaned in the org), `secret-template-dir` (copied _into_ the artifact,
+without one is silently orphaned in the org), `secret-template-dir` (copied *into* the artifact,
 since the deploy job has no checkout to read them from), `env-config-file` (non-secret
 per-environment values, bundled beside the templates), `base-commit` (default `0000000`),
 `head-commit` (default empty — falls back to `$GITHUB_SHA` at runtime), `retention-days`
@@ -299,13 +296,13 @@ One workflow, two phases, the other half of the SF CI/CD pair (see `docs/consumi
 
 **L2 — the 2GP release pipeline.** Three jobs, ordered by cost rather than by
 dependency: `validate` → `package` → `release`. Scratch orgs are capped per Dev Hub
-(concurrently _and_ daily) and validated package creates at 6/day, so validation
+(concurrently *and* daily) and validated package creates at 6/day, so validation
 runs first — a tree that does not compile spends zero creates.
 
 - **`validate`** (skippable via `run-validate: false`) is the only job that consumes a
   scratch org: `sf-org-scratch-create`, deploy `source-dirs`, run `test-level`, then
   delete the org in `if: always()`. Passing the `scratch-org-auth-url` secret makes it
-  log into an **existing** org and _not_ delete it — for iterating on the release flow
+  log into an **existing** org and *not* delete it — for iterating on the release flow
   without burning a scratch org per attempt.
 - **`package`** needs only the Dev Hub: `sf-package-create`, then pushes the annotated
   provenance tag `pkg/<package>/<versionNumber>` carrying the `04t`/`05i`/`08c` ids and
@@ -320,7 +317,7 @@ runs first — a tree that does not compile spends zero creates.
 **Caller permissions:** `contents: write` (`package` pushes the tag, `release` cuts the release)
 
 `source-dirs` empty deploys **every** `packageDirectories` entry, which fails if an
-unrelated entry needs a `replacements` env var — pass the package under release _and_
+unrelated entry needs a `replacements` env var — pass the package under release *and*
 its dependency directories.
 
 `container-user` defaults to `root` only because the published
@@ -383,7 +380,7 @@ normalize ─┬─ create-version ──► reusable-sf-package-release.yml (L2
 Three invariants this file exists to hold, all easy to break by accident:
 
 1. **A skipped job is green.** `report` `needs:` every route and fails the run when none ran, so an operation matching no route is `no-route`, not success.
-2. **`normalize` never fails on a bad request.** It sets `valid=false` and passes the reason on, so `report` can still call Salesforce back _before_ the run goes red. Failing there would leave the requester waiting on a run it can never learn the fate of.
+2. **`normalize` never fails on a bad request.** It sets `valid=false` and passes the reason on, so `report` can still call Salesforce back *before* the run goes red. Failing there would leave the requester waiting on a run it can never learn the fate of.
 3. **Untrusted values reach `github-script` through `env:` only.** A `${{ }}` inside a `script:` body is substituted before Node parses it — that is script injection.
 
 `run-name:` cannot carry the correlation id from here: a called workflow's `run-name` is ignored and the caller's applies. The L4 template in the consuming doc sets it.
@@ -391,13 +388,12 @@ Three invariants this file exists to hold, all easy to break by accident:
 ## Internal CI workflows
 
 ### `ci.yml`
-
 `quality` (format, lint, typecheck, bundle, test at the 95% gate, `dist:verify`) plus `smoke`,
 which drives the local actions with `./` refs and asserts their declared outputs.
 
 ### `smoke-sf-ops-dispatch.yml`
 
-Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion _is_ a red run: a job calling a reusable workflow cannot take `continue-on-error`.
+Routes all three operations through the dispatcher with `dry-run: true` — no scratch org, no `Package2VersionCreates` slot, no secrets. Runs on PRs that touch the dispatcher or its actions. The negative case (unknown operation must fail) is opt-in via `workflow_dispatch` because its assertion *is* a red run: a job calling a reusable workflow cannot take `continue-on-error`.
 
 **Its `permissions:` must cover the widest grant any job in the dispatcher requests —
 `contents: write`, for the `create-version` route's provenance tag — even though a
@@ -406,7 +402,7 @@ run starts and refuses it when a called job asks for more than the calling job w
 granted, `if:`-skipped or not. This is why the workflow sat in `startup_failure` from
 the day it was added until 2026-08-06: it granted `permissions: {}`. A startup failure
 produces no check run, so it never appeared as a red check on a PR — if this workflow
-seems to be passing, confirm it actually _ran_.
+seems to be passing, confirm it actually *ran*.
 
 ### `smoke-sf-artifact.yml`
 
@@ -456,14 +452,12 @@ is tested where the credentials legitimately live: `verify-org-login.yml` in `sf
 > than silently left inconsistent.
 
 ### `catalog-refresh.yml`
-
 Weekly (and on `workflow_dispatch`): re-runs `.github/scripts/build-usage-catalog.sh` and
 opens a PR when `docs/usage-catalog.{md,json}` moved. The catalog is generated — never
 hand-edit it.
 
 ### `release.yml`
-
 On a `vX.Y.Z` tag push: creates the GitHub Release and force-moves the floating `vX` tag.
 **A major bump is a two-step release:** rewrite the reusable workflows' self-references
-from the current `@vX` to `@vX+1` _first_, then tag — see ADR 0002, decision 6 and its
+from the current `@vX` to `@vX+1` *first*, then tag — see ADR 0002, decision 6 and its
 amendment, and the procedure in CONTRIBUTING.md.

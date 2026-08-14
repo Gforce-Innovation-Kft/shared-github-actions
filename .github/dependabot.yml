@@ -6,26 +6,26 @@
 # trusting each publisher not to force-move a tag. See CLAUDE.md, Authoring Conventions.
 version: 2
 updates:
-  - package-ecosystem: 'github-actions'
+  - package-ecosystem: "github-actions"
     # "/" covers .github/workflows; composite action manifests need their
     # directories listed explicitly.
     directories:
-      - '/'
-      - '/.github/actions/aws-secret-get'
-      - '/.github/actions/github-app-token'
-      - '/.github/actions/sf-org-login'
+      - "/"
+      - "/.github/actions/aws-secret-get"
+      - "/.github/actions/github-app-token"
+      - "/.github/actions/sf-org-login"
     schedule:
-      interval: 'weekly'
+      interval: "weekly"
     groups:
       actions:
         patterns:
-          - '*'
+          - "*"
 
-  - package-ecosystem: 'npm'
-    directory: '/'
+  - package-ecosystem: "npm"
+    directory: "/"
     schedule:
-      interval: 'weekly'
+      interval: "weekly"
     groups:
       npm-dependencies:
         patterns:
-          - '*'
+          - "*"
