@@ -95,7 +95,8 @@ gforce-gha-src/
     pull-requests/             # GitHubPullRequestsClient + types
     github-client.ts           # GitHubClient facade — the only client services touch
     index.ts                   # barrel
-  libraries/salesforce/        # external-system logic (services/, selectors/, models/, utils/)
+  libraries/salesforce/        # external-system logic: ApexTestSelectionService (services/),
+                                #   package.xml parsing (selectors/), plus models/, utils/
   services/                    # generic singleton services shared across actions
   types/index.ts               # shared DTOs (validated inputs, results, RepoRef)
   utils/                       # pure stateless helpers (errors, validation, parse-repo-ref)
