@@ -53,9 +53,17 @@ on:
         default: false
         type: boolean
       node-version:
-        description: 'Node.js version to use'
+        description: >-
+          Node.js version. Must satisfy the SF CLI's own engines field — this
+          job installs @salesforce/cli, and the CLI now requires >= 22.
         required: false
-        default: '20.9.0'
+        # Was pinned at '20.9.0'. That exact pin is how this broke: the CLI is
+        # unpinned here, so when it raised its engines floor to >=22 the pair
+        # drifted apart and every consumer's static-analysis job started failing
+        # with `npm WARN EBADENGINE` followed by a bare `exit code 1`. Tracking
+        # the major (and matching what the sf-docker-images pin) keeps the two
+        # moving together.
+        default: '24'
         type: string
       java-version:
         description: 'Java version to use'
