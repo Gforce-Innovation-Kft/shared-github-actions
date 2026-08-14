@@ -140,5 +140,5 @@ because this repo's composite actions wrap those same commands, so the skills ar
 you reproduce a failing pipeline step interactively. They are **not** a way to change
 pipeline behaviour: an action's behaviour lives in its `action.yml`.
 
-**Global tooling available in every session:** lean-ctx (prefer `ctx_*` MCP tools for reads/search/shell — token-compressed), superpowers process skills, and graphify (no graph built for this repo).
+**Global tooling available in every session:** rtk (Bash output compression — automatic via hook), lean-ctx (prefer `ctx_*` MCP tools for reads/search — token-compressed), and superpowers process skills.
 <!-- /skills-tooling -->
