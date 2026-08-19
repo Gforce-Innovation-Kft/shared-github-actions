@@ -13,6 +13,19 @@ and workflow): [`docs/claude-actions-reference.md`](docs/claude-actions-referenc
 **read the entry for any asset before changing it.** The `action.yml` / workflow file
 is the contract; the reference carries the rationale the YAML cannot.
 
+## Where credential VALUES come from
+
+`sf-org-login`'s `credential-source: github-env` branch reads GitHub Environment secrets/variables
+(`SF_JWT_KEY_B64`, `SF_USERNAME`, `SF_CLIENT_ID`, `SF_INSTANCE_URL`) — this repo only consumes
+them, it never defines them. Google Secret Manager, in
+[`gforce-google-infra`](https://github.com/Gforce-Innovation-Kft/gforce-google-infra), is the
+source of truth for those values; its `modules/gh-secret-sync` Terraform module mirrors them into
+consumer repos' Environments (`sf-develop-demo` today). That's a stopgap for repos not yet on
+`credential-source: gcp` — the not-yet-built branch that would read GCP directly via WIF instead
+of GitHub Environment secrets at all (see that repo's
+`docs/superpowers/specs/2026-08-19-github-secret-sync-design.md` for the full picture, including
+why it's one-directional and never the other way round).
+
 ## Naming convention
 
 Recorded in [ADR 0002](docs/adr/0002-naming-and-repo-structure.md). Two rules:
