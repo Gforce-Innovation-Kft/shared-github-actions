@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Check out the action under test
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Attempt the login
         id: attempt
@@ -126,7 +126,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Attempt a login with base64 that is not a PEM key
         id: attempt
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Regression guard: adding credential-source must not have altered the
       # historical auth-url branch, whose default is unrelated to JWT.

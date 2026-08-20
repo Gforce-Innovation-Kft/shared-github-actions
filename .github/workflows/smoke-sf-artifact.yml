@@ -48,7 +48,7 @@ jobs:
       contents: read
     steps:
       - name: Check out the actions under test
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build a throwaway sfdx project
         run: |
@@ -201,7 +201,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build a fixture whose replacement env var is never set
         run: |
@@ -276,7 +276,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build a minimal artifact directory by hand
         run: |
@@ -331,7 +331,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build a valid artifact directory
         run: |
