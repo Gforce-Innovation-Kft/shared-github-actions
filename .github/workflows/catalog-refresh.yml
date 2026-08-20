@@ -50,7 +50,7 @@ jobs:
           echo "::notice::Catalog lists $count reference(s)."
 
       - name: Open a PR when the catalog drifted
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           add-paths: |
             docs/usage-catalog.md
