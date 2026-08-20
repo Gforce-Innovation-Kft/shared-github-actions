@@ -1,12 +1,12 @@
 name: "Salesforce Org Login"
-description: "Authenticate to a Salesforce org by SFDX auth URL or JWT bearer flow, with credentials from AWS Secrets Manager or GitHub Environment secrets"
+description: "Authenticate to a Salesforce org by SFDX auth URL or JWT bearer flow, with credentials from AWS Secrets Manager, GitHub Environment secrets, or GCP Secret Manager"
 author: "GForce Innovation"
 
 # ==============================================================================
-# One login action. Two ways to authenticate, two places credentials come from.
+# One login action. Two ways to authenticate, three places credentials come from.
 #
 #   auth-method       HOW we authenticate      auth-url | jwt
-#   credential-source WHERE credentials live   aws | github-env
+#   credential-source WHERE credentials live   aws | github-env | gcp
 #
 # Every combination ends in the same place — an authenticated `sf` CLI under
 # `org-alias` — so downstream actions depend on one contract instead of
@@ -15,14 +15,21 @@ author: "GForce Innovation"
 #   credential-source: aws         -> AWS Secrets Manager via OIDC role assumption
 #   credential-source: github-env  -> values passed in from GitHub Environment
 #                                     secrets and variables (no cloud account)
+#   credential-source: gcp         -> GCP Secret Manager via Direct Workload
+#                                     Identity Federation (no service account,
+#                                     no key file — see gforce-google-infra)
 #
-# `credential-source` exists so adding a source is additive. A future `gcp`
-# branch slots in beside these two without touching a single caller.
+# `credential-source` exists so adding a source is additive — `gcp` slots in
+# beside the other two without touching a single caller of theirs.
 #
 # Caller permissions:
-#   auth-method: auth-url                          -> none beyond the job default
-#   auth-method: jwt + credential-source: aws      -> id-token: write, contents: read
+#   auth-method: auth-url                            -> none beyond the job default
+#   auth-method: jwt + credential-source: aws        -> id-token: write, contents: read
 #   auth-method: jwt + credential-source: github-env -> none beyond the job default
+#   auth-method: jwt + credential-source: gcp        -> id-token: write, contents: read,
+#                                                        plus a job `environment:` whose
+#                                                        name matches the WIF attribute
+#                                                        condition (e.g. `devhub`)
 # ==============================================================================
 
 inputs:
@@ -34,8 +41,8 @@ inputs:
   credential-source:
     description: |
       Where JWT credentials come from: 'aws' (Secrets Manager, the historical
-      default) or 'github-env' (passed in directly). Ignored when auth-method
-      is auth-url.
+      default), 'github-env' (passed in directly), or 'gcp' (GCP Secret
+      Manager via Direct WIF). Ignored when auth-method is auth-url.
     required: false
     default: "aws"
 
@@ -56,6 +63,20 @@ inputs:
     default: "salesforce/gabor-devhub"
   aws-role-arn:
     description: "IAM role to assume via OIDC. Required when credential-source is aws."
+    required: false
+    default: ""
+
+  # --- credential-source: gcp -------------------------------------------------
+  gcp-workload-identity-provider:
+    description: "Full WIF provider resource name. Required when credential-source is gcp."
+    required: false
+    default: ""
+  gcp-project-id:
+    description: "GCP project ID holding the secret. Required when credential-source is gcp."
+    required: false
+    default: ""
+  gcp-secret-name:
+    description: "Secret Manager secret ID with a username/client_id/instance_url/jwt_key JSON bundle, e.g. salesforce-devhub. Required when credential-source is gcp."
     required: false
     default: ""
 
@@ -134,6 +155,9 @@ runs:
         CREDENTIAL_SOURCE: ${{ inputs.credential-source }}
         SFDX_AUTH_URL: ${{ inputs.sfdx-auth-url }}
         AWS_ROLE_ARN: ${{ inputs.aws-role-arn }}
+        GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ inputs.gcp-workload-identity-provider }}
+        GCP_PROJECT_ID: ${{ inputs.gcp-project-id }}
+        GCP_SECRET_NAME: ${{ inputs.gcp-secret-name }}
         JWT_KEY_B64_IN: ${{ inputs.jwt-key-b64 }}
         USERNAME_IN: ${{ inputs.username }}
         CLIENT_ID_IN: ${{ inputs.client-id }}
@@ -179,8 +203,18 @@ runs:
                     ;;
                 esac
                 ;;
+              gcp)
+                MISSING=""
+                [ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ] || MISSING="$MISSING gcp-workload-identity-provider"
+                [ -n "$GCP_PROJECT_ID" ]                 || MISSING="$MISSING gcp-project-id"
+                [ -n "$GCP_SECRET_NAME" ]                || MISSING="$MISSING gcp-secret-name"
+                if [ -n "$MISSING" ]; then
+                  echo "::error::credential-source 'gcp' is missing:$MISSING" >&2
+                  exit 1
+                fi
+                ;;
               *)
-                echo "::error::credential-source must be 'aws' or 'github-env', got '$CREDENTIAL_SOURCE'." >&2
+                echo "::error::credential-source must be 'aws', 'github-env', or 'gcp', got '$CREDENTIAL_SOURCE'." >&2
                 exit 1
                 ;;
             esac
@@ -257,8 +291,48 @@ runs:
           echo "INSTANCE_URL=$INSTANCE_URL_IN"
         } >> "$GITHUB_ENV"
 
+    - name: Fetch credentials from GCP Secret Manager
+      if: ${{ inputs.auth-method == 'jwt' && inputs.credential-source == 'gcp' }}
+      # Own-repo ref: composite actions cannot use relative paths, so this
+      # resolves at runtime against the released tag — see ADR 0002, decision 6.
+      uses: Gforce-Innovation-Kft/shared-github-actions/.github/actions/gcp-secret-get@v2
+      with:
+        gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+        gcp-project-id: ${{ inputs.gcp-project-id }}
+        gcp-secret-name: ${{ inputs.gcp-secret-name }}
+
+    - name: Stage credentials from GCP
+      if: ${{ inputs.auth-method == 'jwt' && inputs.credential-source == 'gcp' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # gcp-secret-get exported the bundle's own field names uppercased
+        # (username -> USERNAME, client_id -> CLIENT_ID, instance_url ->
+        # INSTANCE_URL, jwt_key -> JWT_KEY). Everything downstream of here
+        # expects the same JWT_KEY_B64/USERNAME/CLIENT_ID/INSTANCE_URL shape
+        # as the aws and github-env branches, so this step is the one place
+        # that bridges the gap — including base64-encoding JWT_KEY, which the
+        # GCP bundle stores as raw PEM (design doc §4.2), not pre-encoded.
+        for FIELD in JWT_KEY USERNAME CLIENT_ID INSTANCE_URL; do
+          if [ -z "${!FIELD:-}" ]; then
+            echo "::error::gcp-secret-get did not export $FIELD — check the secret's JSON has a username/client_id/instance_url/jwt_key bundle." >&2
+            exit 1
+          fi
+        done
+
+        JWT_KEY_B64_VAL=$(printf '%s' "$JWT_KEY" | base64 | tr -d '\n')
+        echo "::add-mask::$JWT_KEY_B64_VAL"
+
+        {
+          echo "JWT_KEY_B64=$JWT_KEY_B64_VAL"
+          echo "USERNAME=$USERNAME"
+          echo "CLIENT_ID=$CLIENT_ID"
+          echo "INSTANCE_URL=$INSTANCE_URL"
+        } >> "$GITHUB_ENV"
+
     # ==========================================================================
-    # 2c. JWT login — shared by both credential sources
+    # 2c. JWT login — shared by all three credential sources
     # ==========================================================================
     - name: Log in with the JWT bearer flow
       if: ${{ inputs.auth-method == 'jwt' }}
@@ -274,11 +348,17 @@ runs:
 
         for FIELD in JWT_KEY_B64 USERNAME CLIENT_ID INSTANCE_URL; do
           if [ -z "${!FIELD:-}" ]; then
-            if [ "$CREDENTIAL_SOURCE" = "aws" ]; then
-              echo "::error::Secret '$SECRET_NAME' exposed no $FIELD field. Expected: JWT_KEY_B64, USERNAME, CLIENT_ID, INSTANCE_URL." >&2
-            else
-              echo "::error::$FIELD was not staged from the GitHub environment." >&2
-            fi
+            case "$CREDENTIAL_SOURCE" in
+              aws)
+                echo "::error::Secret '$SECRET_NAME' exposed no $FIELD field. Expected: JWT_KEY_B64, USERNAME, CLIENT_ID, INSTANCE_URL." >&2
+                ;;
+              gcp)
+                echo "::error::$FIELD was not staged from GCP Secret Manager." >&2
+                ;;
+              *)
+                echo "::error::$FIELD was not staged from the GitHub environment." >&2
+                ;;
+            esac
             exit 1
           fi
         done

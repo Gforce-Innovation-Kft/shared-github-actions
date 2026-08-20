@@ -1,0 +1,71 @@
+name: "GCP Secret Get"
+description: "Fetches a JSON-bundle secret from Google Secret Manager via Direct Workload Identity Federation and returns its fields"
+author: "GForce Innovation"
+
+# Required caller permissions (Direct WIF — no service account, no key file):
+#   id-token: write
+#   contents: read
+# The caller's job also needs an `environment:` whose name matches the WIF
+# provider's attribute_condition — the identity that decides what this
+# action can read comes from that claim, not from any input here.
+#
+# Outputs: none. Every top-level key in the secret's JSON payload is
+# exported as an environment variable named by upper-casing that key
+# (username -> USERNAME, client_id -> CLIENT_ID, jwt_key -> JWT_KEY, ...)
+# and masked in the log. Deliberately generic, like aws-secret-get: this
+# action does not know what shape any particular secret's JSON takes.
+# Callers that need a specific contract (e.g. sf-org-login's JWT_KEY_B64)
+# do their own remapping after calling this — see sf-org-login's
+# "Stage credentials from GCP" step.
+
+inputs:
+  gcp-workload-identity-provider:
+    description: "Full WIF provider resource name (projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>)"
+    required: true
+  gcp-project-id:
+    description: "GCP project ID holding the secret"
+    required: true
+  gcp-secret-name:
+    description: "Secret Manager secret ID, e.g. salesforce-devhub"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Authenticate to Google Cloud (Direct WIF)
+      uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Fetch secret from Secret Manager
+      uses: google-github-actions/get-secretmanager-secrets@v3
+      with:
+        secrets: |-
+          SECRET_JSON:${{ inputs.gcp-project-id }}/${{ inputs.gcp-secret-name }}
+
+    - name: Export secret fields as environment variables
+      shell: bash
+      env:
+        SECRET_NAME: ${{ inputs.gcp-secret-name }}
+      run: |
+        set -euo pipefail
+
+        # node rather than jq: node ships wherever the sf CLI runs, containers
+        # included, so this works on images that carry no jq (matches the
+        # convention in sf-org-login's "Resolve org identity" step).
+        node -e '
+          const data = JSON.parse(process.env.SECRET_JSON || "{}");
+          const keys = Object.keys(data);
+          if (keys.length === 0) {
+            console.error(`::error::Secret "${process.env.SECRET_NAME}" is empty or not valid JSON.`);
+            process.exit(1);
+          }
+          const fs = require("fs");
+          const lines = [];
+          for (const [key, value] of Object.entries(data)) {
+            console.log(`::add-mask::${value}`);
+            lines.push(`${key.toUpperCase()}=${value}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, lines.join("\n") + "\n");
+        '
