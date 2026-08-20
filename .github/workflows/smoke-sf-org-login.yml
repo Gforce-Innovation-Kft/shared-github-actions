@@ -73,6 +73,14 @@ jobs:
             username: someone@example.com
             instance-url: https://login.salesforce.com
 
+          - name: a missing gcp-workload-identity-provider
+            auth-method: jwt
+            credential-source: gcp
+            gcp-workload-identity-provider: ""
+            gcp-project-id: gforce-salesforce-cicd
+            gcp-secret-name: salesforce-devhub
+            instance-url: https://login.salesforce.com
+
           - name: an unknown auth-method
             auth-method: telepathy
             credential-source: github-env
@@ -96,6 +104,9 @@ jobs:
           client-id: ${{ matrix.case.client-id }}
           username: ${{ matrix.case.username }}
           instance-url: ${{ matrix.case.instance-url }}
+          gcp-workload-identity-provider: ${{ matrix.case.gcp-workload-identity-provider }}
+          gcp-project-id: ${{ matrix.case.gcp-project-id }}
+          gcp-secret-name: ${{ matrix.case.gcp-secret-name }}
           org-alias: should-not-exist
 
       - name: Assert it was rejected
