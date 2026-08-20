@@ -174,7 +174,16 @@ The single login action — **two credential sources, one contract**. `auth-meth
 > `devhub`/`true`.
 
 > **Stale:** this entry predates PR #16 and omits the `credential-source: github-env` input it
-> added. Details in the note under `smoke-sf-org-login.yml` below.
+> added. Details in the note under `smoke-sf-org-login.yml` below. It also predates PR #33, which
+> added `credential-source: gcp` (via `gcp-secret-get`) — not documented here yet either.
+
+> **`jwt_key` encoding rule (`credential-source: gcp`):** the GCP Secret Manager secret's
+> `jwt_key` field must be the raw, multi-line PEM — this action base64-encodes it itself in
+> "Stage credentials from GCP" (`sf-org-login/action.yml`). A pre-base64-encoded `jwt_key` fails
+> here with "Decoded JWT key is not a PEM private key", because it gets double-encoded then
+> single-decoded. This happened for real on `salesforce-devhub` (fixed 2026-08-20, root cause and
+> the seeding convention are in `gforce-google-infra`'s `docs/SECRETS.md`) — if this error shows
+> up again, the fix is in that repo's secret data, not in this action's code.
 
 ### `sf-source-delta` (`.github/actions/sf-source-delta/action.yml`)
 
