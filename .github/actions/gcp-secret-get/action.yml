@@ -55,6 +55,10 @@ runs:
         # node rather than jq: node ships wherever the sf CLI runs, containers
         # included, so this works on images that carry no jq (matches the
         # convention in sf-org-login's "Resolve org identity" step).
+        # Every field is written using $GITHUB_ENV'\''s multiline heredoc form
+        # (NAME<<DELIM / value / DELIM), not bare NAME=value — a private key
+        # spans multiple lines, and the simple form corrupts $GITHUB_ENV the
+        # moment a value contains an embedded newline.
         node -e '
           const data = JSON.parse(process.env.SECRET_JSON || "{}");
           const keys = Object.keys(data);
@@ -63,10 +67,15 @@ runs:
             process.exit(1);
           }
           const fs = require("fs");
+          const crypto = require("crypto");
           const lines = [];
           for (const [key, value] of Object.entries(data)) {
-            console.log(`::add-mask::${value}`);
-            lines.push(`${key.toUpperCase()}=${value}`);
+            const stringValue = String(value);
+            for (const line of stringValue.split("\n")) {
+              if (line.length > 0) console.log(`::add-mask::${line}`);
+            }
+            const delimiter = `ghadelim_${crypto.randomBytes(16).toString("hex")}`;
+            lines.push(`${key.toUpperCase()}<<${delimiter}`, stringValue, delimiter);
           }
           fs.appendFileSync(process.env.GITHUB_ENV, lines.join("\n") + "\n");
         '
