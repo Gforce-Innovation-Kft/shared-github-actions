@@ -1,11 +1,26 @@
 {
   "schemaVersion": 1,
   "org": "Gforce-Innovation-Kft",
-  "generatedAt": "2026-08-06T17:06:27Z",
+  "generatedAt": "2026-10-12T14:14:39Z",
   "assets": [
     {
       "kind": "actions",
       "name": "aws-secret-get",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/actions/sf-org-login/action.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "gcp-secret-get",
       "consumers": [
         {
           "repo": "shared-github-actions",
@@ -26,6 +41,10 @@
           "repo": "shared-github-actions",
           "references": [
             {
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
+              "ref": "v2"
+            },
+            {
               "file": ".github/workflows/reusable-sf-release.yml",
               "ref": "v2"
             }
@@ -35,14 +54,44 @@
     },
     {
       "kind": "actions",
-      "name": "sf-jwt-login",
+      "name": "sf-artifact-build",
       "consumers": [
         {
-          "repo": "sf-develop-demo",
+          "repo": "shared-github-actions",
           "references": [
             {
-              "file": ".github/workflows/test-aws-secrets.yml",
-              "ref": "main"
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-artifact-deploy",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "actions",
+      "name": "sf-env-config-apply",
+      "consumers": [
+        {
+          "repo": "shared-github-actions",
+          "references": [
+            {
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
+              "ref": "v2"
             }
           ]
         }
@@ -68,10 +117,36 @@
       "name": "sf-org-login",
       "consumers": [
         {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/verify-org-login.yml",
+              "ref": "v2"
+            }
+          ]
+        },
+        {
+          "repo": "sf-external-app-bootstrap",
+          "references": [
+            {
+              "file": ".github/workflows/setup-connected-app.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/setup-external-app.yml",
+              "ref": "v2"
+            }
+          ]
+        },
+        {
           "repo": "shared-github-actions",
           "references": [
             {
               "file": ".github/workflows/reusable-sf-ops-dispatch.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
               "ref": "v2"
             },
             {
@@ -162,7 +237,45 @@
           "repo": "shared-github-actions",
           "references": [
             {
+              "file": ".github/workflows/reusable-sf-org-deploy.yml",
+              "ref": "v2"
+            },
+            {
               "file": ".github/workflows/reusable-sf-release.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "workflows",
+      "name": "reusable-sf-code-analyze.yml",
+      "consumers": [
+        {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/ci.yml",
+              "ref": "v2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "workflows",
+      "name": "reusable-sf-org-deploy.yml",
+      "consumers": [
+        {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/org-deploy-integration.yml",
+              "ref": "v2"
+            },
+            {
+              "file": ".github/workflows/org-deploy-production.yml",
               "ref": "v2"
             }
           ]
@@ -173,6 +286,15 @@
       "kind": "workflows",
       "name": "reusable-sf-package-release.yml",
       "consumers": [
+        {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/weather2gp-release.yml",
+              "ref": "v2"
+            }
+          ]
+        },
         {
           "repo": "shared-github-actions",
           "references": [
@@ -186,14 +308,23 @@
     },
     {
       "kind": "workflows",
-      "name": "sf-pr-validate.yml",
+      "name": "reusable-sf-pr-validate.yml",
       "consumers": [
+        {
+          "repo": "sf-develop-demo",
+          "references": [
+            {
+              "file": ".github/workflows/ci.yml",
+              "ref": "v2"
+            }
+          ]
+        },
         {
           "repo": "sfdx_template_enterprise",
           "references": [
             {
               "file": ".github/workflows/pr-validate.yml",
-              "ref": "v1"
+              "ref": "v2"
             }
           ]
         }
@@ -201,14 +332,14 @@
     },
     {
       "kind": "workflows",
-      "name": "sf-release.yml",
+      "name": "reusable-sf-release.yml",
       "consumers": [
         {
           "repo": "sfdx_template_enterprise",
           "references": [
             {
               "file": ".github/workflows/release.yml",
-              "ref": "v1"
+              "ref": "v2"
             }
           ]
         }
