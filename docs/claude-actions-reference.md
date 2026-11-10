@@ -181,9 +181,10 @@ The single login action — **two credential sources, one contract**. `auth-meth
 > `jwt_key` field must be the raw, multi-line PEM — this action base64-encodes it itself in
 > "Stage credentials from GCP" (`sf-org-login/action.yml`). A pre-base64-encoded `jwt_key` fails
 > here with "Decoded JWT key is not a PEM private key", because it gets double-encoded then
-> single-decoded. This happened for real on `salesforce-devhub` (fixed 2026-08-20, root cause and
-> the seeding convention are in `gforce-google-infra`'s `docs/SECRETS.md`) — if this error shows
-> up again, the fix is in that repo's secret data, not in this action's code.
+> single-decoded. This happened for real on `salesforce-devhub` (fixed 2026-08-20). The same rule
+> holds for the new `salesforce-devhub-jwt` in `gforce-shared-credentials` — if this error shows
+> up again, the fix is in the secret data, not in this action's code. (The old seeding notes were
+> in the retired `gforce-google-infra` repo.)
 
 ### `sf-source-delta` (`.github/actions/sf-source-delta/action.yml`)
 
