@@ -17,14 +17,24 @@ is the contract; the reference carries the rationale the YAML cannot.
 
 `sf-org-login`'s `credential-source: github-env` branch reads GitHub Environment secrets/variables
 (`SF_JWT_KEY_B64`, `SF_USERNAME`, `SF_CLIENT_ID`, `SF_INSTANCE_URL`) — this repo only consumes
-them, it never defines them. Google Secret Manager, in
-[`gforce-google-infra`](https://github.com/Gforce-Innovation-Kft/gforce-google-infra), is the
-source of truth for those values; its `modules/gh-secret-sync` Terraform module mirrors them into
-consumer repos' Environments (`sf-develop-demo` today). That's a stopgap for repos not yet on
-`credential-source: gcp` — the not-yet-built branch that would read GCP directly via WIF instead
-of GitHub Environment secrets at all (see that repo's
-`docs/superpowers/specs/2026-08-19-github-secret-sync-design.md` for the full picture, including
-why it's one-directional and never the other way round).
+them, it never defines them. The `credential-source: gcp` branch reads Google Secret Manager
+directly via WIF. The Environment secrets that `gh-secret-sync` in the retired
+`gforce-google-infra` repo mirrored into consumer repos (`sf-develop-demo`, `gforce-devhub`) stay
+as they are, but nothing syncs or rotates them any more. See the Google Cloud section below.
+
+## Google Cloud
+
+Load the `gforce-google-cloud` skill before any Google Cloud work.
+
+- This repo's actions (`sf-org-login`, `gcp-secret-get`) take the provider, project and secret as
+  inputs and name no project. Their callers used `gforce-salesforce-cicd` and the pool
+  `github-pool`; both are shutting down.
+- New home: pool `github`, provider `github-actions` in `gforce-shared-platform`, set per caller as
+  repository variable `GCP_WORKLOAD_IDENTITY_PROVIDER`; secrets in `gforce-shared-credentials`
+  (`salesforce-devhub-jwt`, `salesforce-integration-jwt`, `salesforce-demo-production-jwt`,
+  `github-app-salesforce-key`).
+- Never hardcode the provider value or a project number here.
+- Details and the switch checklist: [`docs/gcloud-migration.md`](docs/gcloud-migration.md).
 
 ## Naming convention
 
@@ -124,7 +134,7 @@ Rationale: [`docs/architecture.md`](docs/architecture.md).
 <!-- skills-tooling -->
 ## Skills & AI tooling
 
-Eight repo-scoped skills are committed. They live in `.agents/skills/`, are symlinked
+Nine repo-scoped skills are committed. They live in `.agents/skills/`, are symlinked
 into `.claude/skills/`, and are pinned by content hash in
 [`skills-lock.json`](skills-lock.json). All are vendored from upstream — do not
 hand-edit a vendored `SKILL.md`; the next update overwrites it and the hash stops
@@ -139,6 +149,7 @@ Invoke the relevant one when the task matches:
 
 | Skill | Upstream | Use when |
 |-------|----------|----------|
+| `gforce-google-cloud` | Gforce-Innovation-Kft/gforce-ai | Any Google Cloud work: the project map, which identity each caller uses, the hard stops. Its rules win over google/skills. |
 | `github-actions-docs` | xixu-me/skills | Authoring or editing a workflow / `action.yml` — keeps YAML aligned with current GitHub Actions syntax (composite, reusable, TypeScript action patterns). The default for most work in this repo. |
 | `github-actions-templates` | wshobson/agents | Scaffolding a *new* workflow from a known-good shape, rather than editing an existing one. |
 | `code-review` | mattpocock/skills | Reviewing the TypeScript under `gforce-gha-src/` for quality and correctness. |
