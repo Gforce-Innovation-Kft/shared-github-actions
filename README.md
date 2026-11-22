@@ -1,5 +1,7 @@
 # Shared GitHub Actions
 
+> **GForce catalog:** Platform · status: `production` — **Owns:** all reusable GitHub Actions and callable workflows for Salesforce CI/CD. **Not:** container images (→ sf-docker-images), org automation workflows (→ sf-workflow-runner).
+
 Reusable GitHub Actions for `Gforce-Innovation-Kft`: **TypeScript actions** (a portable
 core + thin adapters), **composite actions**, and **callable workflows** for
 Salesforce CI/CD. Reference them from any repo in the org.
