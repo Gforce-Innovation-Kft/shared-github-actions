@@ -15,7 +15,7 @@ inputs:
     required: false
     default: "delta"
   source-dir:
-    description: "Source directory sfdx-git-delta scans"
+    description: "Source directory sfdx-git-delta scans. An sfdx project root (holds sfdx-project.json) is narrowed to its packageDirectories"
     required: false
     default: "force-app"
   generate-delta:
@@ -84,11 +84,32 @@ runs:
         if [ "$GENERATE_DELTA" = "true" ]; then
           EXTRA_ARGS+=(--generate-delta)
         fi
+
+        # A project root is narrowed to its packageDirectories. sgd treats the
+        # whole folder as in scope, so metadata-shaped files outside them
+        # (e.g. Apex samples in .agents/skills/) land in package.xml and the
+        # deploy fails: "named in package.xml, but was not found".
+        SCOPE_ARGS=()
+        PROJECT_FILE="${SOURCE_DIR%/}/sfdx-project.json"
+        if [ -f "$PROJECT_FILE" ]; then
+          command -v jq > /dev/null || { echo "::error::jq is required to read $PROJECT_FILE" >&2; exit 1; }
+          while IFS= read -r DIR; do
+            SCOPE_ARGS+=(--source-dir "${SOURCE_DIR%/}/${DIR}")
+          done < <(jq -r '.packageDirectories[].path' "$PROJECT_FILE")
+          if [ "${#SCOPE_ARGS[@]}" -eq 0 ]; then
+            echo "::error::$PROJECT_FILE lists no packageDirectories" >&2
+            exit 1
+          fi
+        else
+          SCOPE_ARGS=(--source-dir "$SOURCE_DIR")
+        fi
+        echo "sgd scope: ${SCOPE_ARGS[*]}"
+
         sf sgd source delta \
           --from "$FROM_REF" \
           --to "$TO_REF" \
           --output-dir "$OUTPUT_DIR" \
-          --source-dir "$SOURCE_DIR" \
+          "${SCOPE_ARGS[@]}" \
           "${EXTRA_ARGS[@]}"
 
         PACKAGE_XML="$OUTPUT_DIR/package/package.xml"

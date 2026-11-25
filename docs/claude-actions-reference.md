@@ -189,6 +189,8 @@ The single login action — **two credential sources, one contract**. `auth-meth
 
 Generates a delta `package.xml` between two git refs with sfdx-git-delta (installs the plugin on the fly when missing; preinstalled in `gforceinnovation/sf-ci`). Writes a component table to the step summary and `<output-dir>/components.md`. Requires a `fetch-depth: 0` checkout so both refs resolve.
 
+**Trap — project root as `source-dir`:** sgd treats the whole folder as in scope, so a repo-root scan put metadata-shaped files outside the package (Apex samples under `.agents/skills/`) into `package.xml`, and the deploy failed with "named in package.xml, but was not found in zipped directory". When `source-dir` holds `sfdx-project.json`, the action now passes one `--source-dir` per `packageDirectories[].path` (needs `jq`, present in `gforceinnovation/sf-ci`). A plain folder such as `force-app` is passed through unchanged.
+
 **Inputs:** `from-ref` (required), `to-ref` (default `HEAD`), `output-dir` (default `delta`), `source-dir` (default `force-app`), `generate-delta` (default `false`)
 **Outputs:** `package-path`, `has-changes`, `component-count`
 
